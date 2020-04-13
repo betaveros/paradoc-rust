@@ -1,5 +1,5 @@
 [package]
-name = "paradoc-rust"
+name = "paradoc"
 version = "0.1.0"
 authors = ["Brian Chen <brian.chxn@gmail.com>"]
 edition = "2018"
@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 num = "0.2.1"
 regex = "1"
+num-traits = "0.2"
