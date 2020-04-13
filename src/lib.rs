@@ -58,7 +58,7 @@ impl Environment {
 
 pub trait Block : Debug {
     fn run(&self, env: &mut Environment) -> ();
-    fn code_repr(&self) -> &String;
+    fn code_repr(&self) -> String;
 }
 
 #[derive(Debug)]
@@ -98,8 +98,8 @@ impl Block for BuiltIn {
     fn run(&self, env: &mut Environment) {
         (self.func)(env);
     }
-    fn code_repr(&self) -> &String {
-        &self.name
+    fn code_repr(&self) -> String {
+        self.name.clone()
     }
 }
 
@@ -210,8 +210,77 @@ impl Block for CasedBuiltIn {
             panic!("No cases of {} applied!", self.name);
         }
     }
-    fn code_repr(&self) -> &String {
-        &self.name
+    fn code_repr(&self) -> String {
+        self.name.clone()
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RcLeader {
+    Lit(Rc<PdObj>),
+    Var(Rc<String>),
+}
+
+#[derive(Debug)]
+struct CodeBlock(Vec<RcToken>);
+
+#[derive(Debug, PartialEq)]
+pub struct RcToken(pub RcLeader, pub Vec<lex::Trailer>);
+
+fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
+    tokens.into_iter().map(|lex::Token(leader, trailer)| {
+        let rcleader = match leader {
+            lex::Leader::StringLit(s) => {
+                RcLeader::Lit(Rc::new(PdObj::PdString(s)))
+            }
+            lex::Leader::IntLit(n) => {
+                RcLeader::Lit(Rc::new(PdObj::PdInt(n)))
+            }
+            lex::Leader::CharLit(c) => {
+                RcLeader::Lit(Rc::new(PdObj::PdChar(c)))
+            }
+            lex::Leader::FloatLit(f) => {
+                RcLeader::Lit(Rc::new(PdObj::PdFloat(f)))
+            }
+            lex::Leader::Block(b) => {
+                RcLeader::Lit(Rc::new(PdObj::PdBlock(Box::new(CodeBlock(rcify(*b))))))
+            }
+            lex::Leader::Var(s) => {
+                // TODO: break trailers and stuff
+                RcLeader::Var(Rc::new(s))
+            }
+        };
+        RcToken(rcleader, trailer)
+    }).collect()
+}
+
+impl Block for CodeBlock {
+    fn run(&self, mut env: &mut Environment) {
+        for RcToken(leader, trailer) in &self.0 {
+            // println!("{:?} {:?}", leader, trailer);
+            // TODO: handle trailers lolololol
+            let obj = match leader {
+                RcLeader::Lit(obj) => {
+                    Rc::clone(&obj)
+                }
+                RcLeader::Var(s) => {
+                    // TODO: break trailers and stuff
+                    // let var0: &String = s; let mut var: String = var0.clone();
+                    let mut var: String = String::clone(s);
+                    trailer.iter().for_each(|x| var.push_str(&x.0));
+
+                    match env.variables.get(&var) {
+                        Some(obj) => { Rc::clone(obj) }
+                        None => { panic!("undefined var"); }
+                    }
+                }
+            };
+
+            apply_on(&mut env, obj);
+        }
+    }
+    fn code_repr(&self) -> String {
+        "???".to_string()
     }
 }
 
@@ -292,39 +361,9 @@ pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
     let pd_token_pattern = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_])([a-z_]*)"#).unwrap();
     // for .. in .., which is implicitly into_iter(), can move ownership out of the array
     // instead of iter(), whose body borrows elements only
-    for lex::Token(leader, trailer) in crate::lex::parse(code) {
-        println!("{:?} {:?}", leader, trailer);
-        // TODO: handle trailers lolololol
-        let obj = match leader {
-            lex::Leader::StringLit(s) => {
-                Rc::new(PdObj::PdString(s))
-            }
-            lex::Leader::IntLit(n) => {
-                Rc::new(PdObj::PdInt(n))
-            }
-            lex::Leader::CharLit(c) => {
-                Rc::new(PdObj::PdChar(c))
-            }
-            lex::Leader::FloatLit(f) => {
-                Rc::new(PdObj::PdFloat(f))
-            }
-            lex::Leader::Block(b) => {
-                panic!("what are blocks");
-            }
-            lex::Leader::Var(s) => {
-                // TODO: break trailers and stuff
-                let mut var = s.clone();
-                trailer.iter().for_each(|x| var.push_str(&x.0));
+    let block = CodeBlock(rcify(lex::parse(code)));
 
-                match env.variables.get(&var) {
-                    Some(obj) => { Rc::clone(obj) }
-                    None => { panic!("undefined var"); }
-                }
-            }
-        };
-
-        apply_on(&mut env, obj);
-    }
+    block.run(&mut env);
 
     env.stack
 }
