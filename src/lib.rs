@@ -1,3 +1,5 @@
+#[macro_use] extern crate lazy_static;
+
 use std::rc::Rc;
 use std::fmt::Debug;
 use num::bigint::BigInt;
@@ -5,6 +7,8 @@ use num::bigint::ToBigInt;
 use num_traits::cast::ToPrimitive;
 use regex::Regex;
 use std::collections::HashMap;
+
+mod lex;
 
 #[derive(Debug)]
 pub struct Environment {
@@ -274,6 +278,11 @@ fn initialize(env: &mut Environment) {
     env.variables.insert("N".to_string(), Rc::new(PdObj::PdChar('\n')));
     env.variables.insert("A".to_string(), Rc::new(PdObj::PdInt(10.to_bigint().unwrap())));
     env.variables.insert("Ep".to_string(), Rc::new(PdObj::PdFloat(1e-9)));
+
+    env.variables.insert(" ".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+        name: "Nop".to_string(),
+        func: |_env| {},
+    }))));
 }
 
 pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
@@ -281,34 +290,40 @@ pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
     initialize(&mut env);
 
     let pd_token_pattern = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_])([a-z_]*)"#).unwrap();
-    let mut i = 0;
-    let mut go = true;
-    while go {
-        match pd_token_pattern.find_at(code, i) {
-            Some(match_result) => {
-                let j = match_result.end();
-                let token = &code[i..j];
-                println!("{}", token);
-                match token.parse::<BigInt>() {
-                    Ok(x) => {
-                        env.push(Rc::new(PdObj::PdInt(x.clone())));
-                    }
-                    _ => {}
+    // for .. in .., which is implicitly into_iter(), can move ownership out of the array
+    // instead of iter(), whose body borrows elements only
+    for lex::Token(leader, trailer) in crate::lex::parse(code) {
+        println!("{:?} {:?}", leader, trailer);
+        // TODO: handle trailers lolololol
+        let obj = match leader {
+            lex::Leader::StringLit(s) => {
+                Rc::new(PdObj::PdString(s))
+            }
+            lex::Leader::IntLit(n) => {
+                Rc::new(PdObj::PdInt(n))
+            }
+            lex::Leader::CharLit(c) => {
+                Rc::new(PdObj::PdChar(c))
+            }
+            lex::Leader::FloatLit(f) => {
+                Rc::new(PdObj::PdFloat(f))
+            }
+            lex::Leader::Block(b) => {
+                panic!("what are blocks");
+            }
+            lex::Leader::Var(s) => {
+                // TODO: break trailers and stuff
+                let mut var = s.clone();
+                trailer.iter().for_each(|x| var.push_str(&x.0));
+
+                match env.variables.get(&var) {
+                    Some(obj) => { Rc::clone(obj) }
+                    None => { panic!("undefined var"); }
                 }
-                match env.variables.get(token) {
-                    Some(obj) => {
-                        let obj2 = Rc::clone(obj);
-                        apply_on(&mut env, obj2);
-                    }
-                    None => {}
-                }
-                // println!("{:?}", &code[i..j].parse::<BigInt>());
-                i = j;
-            },
-            None => {
-                go = false;
-            },
-        }
+            }
+        };
+
+        apply_on(&mut env, obj);
     }
 
     env.stack
