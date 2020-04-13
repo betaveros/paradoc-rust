@@ -70,6 +70,10 @@ impl Environment {
         }
     }
 
+    fn short_insert(&mut self, name: &str, obj: PdObj) {
+        self.variables.insert(name.to_string(), Rc::new(obj));
+    }
+
     fn new() -> Environment {
         Environment {
             stack: Vec::new(),
@@ -106,6 +110,10 @@ impl PartialEq for PdObj {
             _ => false,
         }
     }
+}
+
+impl From<i32> for PdObj {
+    fn from(x: i32) -> Self { PdObj::PdInt(x.to_bigint().unwrap()) }
 }
 
 struct BuiltIn {
@@ -291,8 +299,7 @@ impl Block for CodeBlock {
                 }
                 RcLeader::Var(s) => {
                     // TODO: break trailers and stuff
-                    // let var0: &String = s; let mut var: String = var0.clone();
-                    let mut var: String = String::clone(s);
+                    let mut var: String = (&**s).clone();
                     trailer.iter().for_each(|x| var.push_str(&x.0));
 
                     match env.variables.get(&var) {
@@ -374,26 +381,26 @@ fn initialize(env: &mut Environment) {
     add_cases(":", cc![dup_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
-    env.variables.insert("N".to_string(), Rc::new(PdObj::PdChar('\n')));
-    env.variables.insert("A".to_string(), Rc::new(PdObj::PdInt(10.to_bigint().unwrap())));
-    env.variables.insert("Ep".to_string(), Rc::new(PdObj::PdFloat(1e-9)));
+    env.short_insert("N", PdObj::PdChar('\n'));
+    env.short_insert("A", PdObj::from(10));
+    env.short_insert("Ep", PdObj::PdFloat(1e-9));
 
-    env.variables.insert(" ".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+    env.short_insert(" ", PdObj::PdBlock(Box::new(BuiltIn {
         name: "Nop".to_string(),
         func: |_env| {},
-    }))));
-    env.variables.insert("[".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+    })));
+    env.short_insert("[", PdObj::PdBlock(Box::new(BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); },
-    }))));
-    env.variables.insert("]".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+    })));
+    env.short_insert("]", PdObj::PdBlock(Box::new(BuiltIn {
         name: "Make_array".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
             env.push(Rc::new(PdObj::PdList(list)));
         },
-    }))));
-    env.variables.insert("~".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+    })));
+    env.short_insert("~", PdObj::PdBlock(Box::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
             match env.pop() {
@@ -413,7 +420,7 @@ fn initialize(env: &mut Environment) {
                 }
             }
         },
-    }))));
+    })));
 }
 
 pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
