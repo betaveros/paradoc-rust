@@ -132,14 +132,19 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
             )}
             Some('{') => {
                 let (inner, ni) = parse_at(tokens, cur + 1);
-                (Leader::Block(Box::new(inner)), ni)
+                assert_eq!(tokens[ni], ("}", ""), "inner parse should stop at close brace");
+                (Leader::Block(Box::new(inner)), ni + 1)
             }
             Some('}') => { break; }
             None => { break; }
             _ => match leader.parse::<BigInt>() {
                 Ok(x) => { (Leader::IntLit(x), cur + 1) }
-                // TODO: handle floats lol
-                _ => { (Leader::Var(leader.to_string()), cur + 1) }
+                _ => {
+                    match leader.parse::<f64>() {
+                        Ok(x) => { (Leader::FloatLit(x), cur + 1) }
+                        _ => (Leader::Var(leader.to_string()), cur + 1)
+                    }
+                }
             }
         };
         ret.push(Token(ld, parse_trailer(trailer)));

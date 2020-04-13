@@ -5,7 +5,6 @@ use std::fmt::Debug;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
 use num_traits::cast::ToPrimitive;
-use regex::Regex;
 use std::collections::HashMap;
 
 mod lex;
@@ -22,9 +21,15 @@ impl Environment {
     fn push(&mut self, obj: Rc<PdObj>) {
         self.stack.push(obj)
     }
-    fn extend(&mut self, objs: Vec<Rc<PdObj>>) {
+    // idk what the idiomatic way is yet
+    // fn extend(&mut self, objs: Vec<Rc<PdObj>>) {
+    //     for obj in objs {
+    //         self.push(obj)
+    //     }
+    // }
+    fn extend_clone(&mut self, objs: &Vec<Rc<PdObj>>) {
         for obj in objs {
-            self.push(obj)
+            self.push(Rc::clone(obj))
         }
     }
     fn pop(&mut self) -> Option<Rc<PdObj>> {
@@ -44,6 +49,25 @@ impl Environment {
             None => None
         }
         // TODO: stack trigger
+    }
+
+    fn mark_stack(&mut self) {
+        self.marker_stack.push(self.stack.len())
+    }
+
+    fn pop_stack_marker(&mut self) -> Option<usize> {
+        self.marker_stack.pop()
+    }
+
+    fn pop_until_stack_marker(&mut self) -> Vec<Rc<PdObj>> {
+        match self.pop_stack_marker() {
+            Some(marker) => {
+                self.stack.split_off(marker) // this is way too perfect
+            }
+            None => {
+                panic!("popping TODO this will do stack trigger stuff");
+            }
+        }
     }
 
     fn new() -> Environment {
@@ -228,6 +252,8 @@ struct CodeBlock(Vec<RcToken>);
 pub struct RcToken(pub RcLeader, pub Vec<lex::Trailer>);
 
 fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
+    // for .. in .., which is implicitly into_iter(), can move ownership out of the array
+    // (iter() borrows elements only, but we are consuming tokens here)
     tokens.into_iter().map(|lex::Token(leader, trailer)| {
         let rcleader = match leader {
             lex::Leader::StringLit(s) => {
@@ -259,9 +285,9 @@ impl Block for CodeBlock {
         for RcToken(leader, trailer) in &self.0 {
             // println!("{:?} {:?}", leader, trailer);
             // TODO: handle trailers lolololol
-            let obj = match leader {
+            let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    Rc::clone(&obj)
+                    (Rc::clone(&obj), true)
                 }
                 RcLeader::Var(s) => {
                     // TODO: break trailers and stuff
@@ -270,13 +296,17 @@ impl Block for CodeBlock {
                     trailer.iter().for_each(|x| var.push_str(&x.0));
 
                     match env.variables.get(&var) {
-                        Some(obj) => { Rc::clone(obj) }
+                        Some(obj) => { (Rc::clone(obj), false) }
                         None => { panic!("undefined var"); }
                     }
                 }
             };
 
-            apply_on(&mut env, obj);
+            if reluctant {
+                env.push(obj);
+            } else {
+                apply_on(&mut env, obj);
+            }
         }
     }
     fn code_repr(&self) -> String {
@@ -352,15 +382,44 @@ fn initialize(env: &mut Environment) {
         name: "Nop".to_string(),
         func: |_env| {},
     }))));
+    env.variables.insert("[".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+        name: "Mark_stack".to_string(),
+        func: |env| { env.mark_stack(); },
+    }))));
+    env.variables.insert("]".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+        name: "Make_array".to_string(),
+        func: |env| {
+            let list = env.pop_until_stack_marker();
+            env.push(Rc::new(PdObj::PdList(list)));
+        },
+    }))));
+    env.variables.insert("~".to_string(), Rc::new(PdObj::PdBlock(Box::new(BuiltIn {
+        name: "Expand_or_eval".to_string(),
+        func: |env| {
+            match env.pop() {
+                None => { panic!("~_~"); }
+                Some(x) => {
+                    match &*x {
+                        PdObj::PdBlock(bb) => {
+                            bb.run(env);
+                        }
+                        PdObj::PdList(ls) => {
+                            env.extend_clone(ls);
+                        }
+                        _ => {
+                            panic!("~ what");
+                        }
+                    }
+                }
+            }
+        },
+    }))));
 }
 
 pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
     let mut env = Environment::new();
     initialize(&mut env);
 
-    let pd_token_pattern = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_])([a-z_]*)"#).unwrap();
-    // for .. in .., which is implicitly into_iter(), can move ownership out of the array
-    // instead of iter(), whose body borrows elements only
     let block = CodeBlock(rcify(lex::parse(code)));
 
     block.run(&mut env);
