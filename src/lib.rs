@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 use std::fmt::Debug;
+use std::mem;
 use num::Integer;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
@@ -16,6 +17,22 @@ pub struct Environment {
     x_stack: Vec<Rc<PdObj>>,
     variables: HashMap<String, Rc<PdObj>>,
     marker_stack: Vec<usize>,
+    // hmmm...
+    shadow: Option<ShadowState>,
+}
+
+#[derive(Debug)]
+pub struct ShadowState {
+    env: Box<Environment>,
+    arity: usize,
+}
+
+impl ShadowState {
+    fn pop(&mut self) -> Option<Rc<PdObj>> {
+        let res = self.env.pop();
+        if res.is_some() { self.arity += 1; }
+        res
+    }
 }
 
 impl Environment {
@@ -28,6 +45,11 @@ impl Environment {
     //         self.push(obj)
     //     }
     // }
+    fn extend(&mut self, objs: Vec<Rc<PdObj>>) {
+        for obj in objs {
+            self.push(obj)
+        }
+    }
     fn extend_clone(&mut self, objs: &Vec<Rc<PdObj>>) {
         for obj in objs {
             self.push(Rc::clone(obj))
@@ -47,9 +69,16 @@ impl Environment {
                 }
                 Some(v)
             }
-            None => None
+            None => match &mut self.shadow {
+                Some(inner) => inner.pop(),
+                None => None
+            }
         }
         // TODO: stack trigger
+    }
+
+    fn take_stack(&mut self) -> Vec<Rc<PdObj>> {
+        mem::take(&mut self.stack)
     }
 
     fn mark_stack(&mut self) {
@@ -81,13 +110,39 @@ impl Environment {
             x_stack: Vec::new(),
             variables: HashMap::new(),
             marker_stack: Vec::new(),
+            shadow: None,
         }
+    }
+    fn run_on_bracketed_shadow<T>(&mut self, body: impl FnOnce(&mut Environment) -> T) -> T {
+        let env = mem::replace(self, Environment::new());
+
+        let mut benv = Environment {
+            stack: Vec::new(),
+            x_stack: Vec::new(),
+            variables: HashMap::new(),
+            marker_stack: vec![0],
+            shadow: Some(ShadowState { env: Box::new(env), arity: 0 }),
+        };
+
+        let ret = body(&mut benv);
+
+        mem::replace(self, *(benv.shadow.unwrap().env));
+
+        ret
     }
 }
 
 pub trait Block : Debug {
     fn run(&self, env: &mut Environment) -> ();
     fn code_repr(&self) -> String;
+}
+
+fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) -> Vec<Rc<PdObj>> {
+    env.run_on_bracketed_shadow(|inner| {
+        inner.extend(args);
+        func.run(inner);
+        inner.take_stack()
+    })
 }
 
 #[derive(Debug)]
@@ -97,7 +152,7 @@ pub enum PdObj {
     PdChar(char),
     PdString(String),
     PdList(Vec<Rc<PdObj>>),
-    PdBlock(Box<dyn Block>),
+    PdBlock(Rc<dyn Block>),
 }
 
 impl PartialEq for PdObj {
@@ -248,6 +303,60 @@ impl Block for CasedBuiltIn {
     }
 }
 
+#[derive(Debug)]
+struct EachBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for EachBlock {
+    fn run(&self, env: &mut Environment) {
+        // TODO: literally everything
+        // Extract into sandbox; push x-stack; handle continue/breaks
+        match env.pop() {
+            None => {
+                panic!("each no stack")
+            }
+            Some(top) => match &*top {
+                PdObj::PdList(vec) => {
+                    for obj in vec {
+                        env.push(Rc::clone(obj));
+                        self.body.run(env);
+                    }
+                }
+                _ => { panic!("each failed") }
+            }
+        }
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_each"
+    }
+}
+
+#[derive(Debug)]
+struct MapBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for MapBlock {
+    fn run(&self, env: &mut Environment) {
+        // TODO: literally everything
+        // Extract into sandbox; push x-stack; handle continue/breaks
+        match env.pop() {
+            None => panic!("map no stack"),
+            Some(top) => match &*top {
+                PdObj::PdList(vec) => {
+                    let res = vec.iter().flat_map(|obj| {
+                        sandbox(env, &self.body, vec![Rc::clone(obj)])
+                    }).collect();
+                    env.push(Rc::new(PdObj::PdList(res)));
+                }
+                _ => { panic!("each failed") }
+            }
+        }
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_each"
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum RcLeader {
     Lit(Rc<PdObj>),
@@ -278,15 +387,59 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
                 RcLeader::Lit(Rc::new(PdObj::PdFloat(f)))
             }
             lex::Leader::Block(b) => {
-                RcLeader::Lit(Rc::new(PdObj::PdBlock(Box::new(CodeBlock(rcify(*b))))))
+                RcLeader::Lit(Rc::new(PdObj::PdBlock(Rc::new(CodeBlock(rcify(*b))))))
             }
             lex::Leader::Var(s) => {
-                // TODO: break trailers and stuff
                 RcLeader::Var(Rc::new(s))
             }
         };
         RcToken(rcleader, trailer)
     }).collect()
+}
+
+fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
+    match &**obj {
+        PdObj::PdBlock(bb) => match trailer.0.as_ref() {
+            "e" | "_e" | "_each" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::PdBlock(Rc::new(EachBlock { body }))), false))
+            }
+            "m" | "_m" | "_map" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::PdBlock(Rc::new(MapBlock { body }))), false))
+            }
+            _ => None
+        }
+        _ => None
+    }
+}
+
+fn apply_all_trailers(mut obj: Rc<PdObj>, mut reluctant: bool, trailer: &[lex::Trailer]) -> Option<(Rc<PdObj>, bool)> {
+    for t in trailer {
+        let np = apply_trailer(&obj, t)?; // unwraps or returns None from entire function
+        obj = np.0;
+        reluctant = np.1;
+    }
+    Some((obj, reluctant))
+}
+
+fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailers: &'b[lex::Trailer]) -> Option<(&'a Rc<PdObj>, &'b[lex::Trailer])> {
+
+    let mut var: String = leader.to_string();
+
+    if let Some(res) = env.variables.get(leader) {
+        return Some((res, trailers));
+    }
+
+    for (i, t) in trailers.iter().enumerate() {
+        var.push_str(&t.0);
+
+        if let Some(res) = env.variables.get(leader) {
+            return Some((res, &trailers[i+1..]));
+        }
+    }
+
+    None
 }
 
 impl Block for CodeBlock {
@@ -296,15 +449,13 @@ impl Block for CodeBlock {
             // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    (Rc::clone(&obj), true)
+                    apply_all_trailers(Rc::clone(obj), true, trailer).unwrap()
                 }
                 RcLeader::Var(s) => {
-                    // TODO: break trailers and stuff
-                    let mut var: String = (**s).clone();
-                    trailer.iter().for_each(|x| var.push_str(&x.0));
-
-                    match env.variables.get(&var) {
-                        Some(obj) => { (Rc::clone(obj), false) }
+                    match lookup_and_break_trailers(env, s, trailer) {
+                        Some((obj, rest)) => {
+                            apply_all_trailers(Rc::clone(obj), false, rest).unwrap()
+                        }
                         None => { panic!("undefined var"); }
                     }
                 }
@@ -367,7 +518,7 @@ fn initialize(env: &mut Environment) {
     let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| vec![Rc::clone(a), Rc::clone(a)] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
-        env.variables.insert(name.to_string(), Rc::new(PdObj::PdBlock(Box::new(CasedBuiltIn {
+        env.variables.insert(name.to_string(), Rc::new(PdObj::PdBlock(Rc::new(CasedBuiltIn {
             name: name.to_string(),
             cases,
         }))));
@@ -385,8 +536,8 @@ fn initialize(env: &mut Environment) {
     add_cases("/", cc![div_case]);
     add_cases("%", cc![mod_case, fmod_case]);
     add_cases("÷", cc![intdiv_case, fintdiv_case]);
-    add_cases("(", cc![inc_case]);
-    add_cases(")", cc![dec_case]);
+    add_cases("(", cc![dec_case]);
+    add_cases(")", cc![inc_case]);
     add_cases(":", cc![dup_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
@@ -394,22 +545,22 @@ fn initialize(env: &mut Environment) {
     env.short_insert("A", PdObj::from(10));
     env.short_insert("Ep", PdObj::PdFloat(1e-9));
 
-    env.short_insert(" ", PdObj::PdBlock(Box::new(BuiltIn {
+    env.short_insert(" ", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Nop".to_string(),
         func: |_env| {},
     })));
-    env.short_insert("[", PdObj::PdBlock(Box::new(BuiltIn {
+    env.short_insert("[", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); },
     })));
-    env.short_insert("]", PdObj::PdBlock(Box::new(BuiltIn {
+    env.short_insert("]", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Make_array".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
             env.push(Rc::new(PdObj::PdList(list)));
         },
     })));
-    env.short_insert("~", PdObj::PdBlock(Box::new(BuiltIn {
+    env.short_insert("~", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
             match env.pop() {

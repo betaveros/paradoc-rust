@@ -120,7 +120,8 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
     let mut cur = start;
     while cur < tokens.len() {
         // TODO: trailers
-        let (leader, trailer) = tokens[cur];
+        let (leader, trailer0) = tokens[cur];
+        let mut trailer = trailer0;
         let (ld, next) = match leader.chars().next() { // first utf-8 char
             Some('"') => {(
                 Leader::StringLit(parse_string_leader(leader)),
@@ -132,7 +133,8 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
             )}
             Some('{') => {
                 let (inner, ni) = parse_at(tokens, cur + 1);
-                assert_eq!(tokens[ni], ("}", ""), "inner parse should stop at close brace");
+                assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
+                trailer = tokens[ni].1;
                 (Leader::Block(Box::new(inner)), ni + 1)
             }
             Some('}') => { break; }
