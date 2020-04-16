@@ -299,7 +299,7 @@ impl Block for CodeBlock {
                 }
                 RcLeader::Var(s) => {
                     // TODO: break trailers and stuff
-                    let mut var: String = (&**s).clone();
+                    let mut var: String = (**s).clone();
                     trailer.iter().for_each(|x| var.push_str(&x.0));
 
                     match env.variables.get(&var) {
