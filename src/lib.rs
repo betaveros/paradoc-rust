@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 use std::fmt::Debug;
+use num::Integer;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
 use num_traits::cast::ToPrimitive;
@@ -354,7 +355,13 @@ fn initialize(env: &mut Environment) {
     let (plus_case,  fplus_case ) = numfs![a, b, a + b];
     let (minus_case, fminus_case) = numfs![a, b, a - b];
     let (times_case, ftimes_case) = numfs![a, b, a * b];
-    let (div_case,   fdiv_case  ) = numfs![a, b, a / b];
+    // TODO: signs...
+    let div_case = ff_f![a, b, a / b];
+    let mod_case = ii_i![a, b, Integer::mod_floor(a, b)];
+    let fmod_case = ff_f![a, b, a.rem_euclid(*b)];
+    let intdiv_case = ii_i![a, b, Integer::div_floor(a, b)];
+    let fintdiv_case = ff_f![a, b, a.div_euclid(*b)];
+
     let inc_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a + 1))] });
     let dec_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a - 1))] });
     let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| vec![Rc::clone(a), Rc::clone(a)] });
@@ -375,7 +382,9 @@ fn initialize(env: &mut Environment) {
     add_cases("+", cc![plus_case, fplus_case]);
     add_cases("-", cc![minus_case, fminus_case]);
     add_cases("*", cc![times_case, ftimes_case]);
-    add_cases("/", cc![div_case, fdiv_case]);
+    add_cases("/", cc![div_case]);
+    add_cases("%", cc![mod_case, fmod_case]);
+    add_cases("÷", cc![intdiv_case, fintdiv_case]);
     add_cases("(", cc![inc_case]);
     add_cases(")", cc![dec_case]);
     add_cases(":", cc![dup_case]);
