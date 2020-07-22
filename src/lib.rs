@@ -113,6 +113,18 @@ impl Environment {
             shadow: None,
         }
     }
+
+    fn to_string(&self, obj: &Rc<PdObj>) -> String {
+        match &**obj {
+            PdObj::PdInt(a) => a.to_string(),
+            PdObj::PdFloat(x) => x.to_string(),
+            PdObj::PdChar(c) => c.to_string(),
+            PdObj::PdString(s) => s.clone(),
+            PdObj::PdList(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
+            PdObj::PdBlock(b) => b.code_repr(),
+        }
+    }
+
     fn run_on_bracketed_shadow<T>(&mut self, body: impl FnOnce(&mut Environment) -> T) -> T {
         let env = mem::replace(self, Environment::new());
 
@@ -577,6 +589,28 @@ fn initialize(env: &mut Environment) {
                             panic!("~ what");
                         }
                     }
+                }
+            }
+        },
+    })));
+    env.short_insert("O", PdObj::PdBlock(Rc::new(BuiltIn {
+        name: "Print".to_string(),
+        func: |env| {
+            match env.pop() {
+                None => { panic!("~_~"); }
+                Some(x) => {
+                    print!("{}", env.to_string(&x));
+                }
+            }
+        },
+    })));
+    env.short_insert("P", PdObj::PdBlock(Rc::new(BuiltIn {
+        name: "Print".to_string(),
+        func: |env| {
+            match env.pop() {
+                None => { panic!("~_~"); }
+                Some(x) => {
+                    println!("{}", env.to_string(&x));
                 }
             }
         },
