@@ -6,6 +6,10 @@ fn int(x: i32) -> Rc<paradoc::PdObj> {
     Rc::new(paradoc::PdObj::PdInt(x.to_bigint().unwrap()))
 }
 
+fn list(xs: Vec<Rc<paradoc::PdObj>>) -> Rc<paradoc::PdObj> {
+    Rc::new(paradoc::PdObj::PdList(Rc::new(xs)))
+}
+
 #[test]
 fn basic() {
     assert_eq!(paradoc::simple_eval("3 4+"), vec![int(7)]);
@@ -14,13 +18,14 @@ fn basic() {
 }
 
 #[test]
-fn list() {
+fn test_list() {
     assert_eq!(paradoc::simple_eval("[3 4]~+"), vec![int(7)]);
 }
 
 #[test]
 fn map() {
-    assert_eq!(paradoc::simple_eval("[3 4])m"), vec![Rc::new(paradoc::PdObj::PdList(vec![int(4), int(5)]))]);
+    assert_eq!(paradoc::simple_eval("[3 4])m"), vec![list(vec![int(4), int(5)])]);
+    assert_eq!(paradoc::simple_eval("[3 4]{Y+}%"), vec![list(vec![int(3), int(5)])]);
 }
 
 #[test]

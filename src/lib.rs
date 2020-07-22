@@ -124,6 +124,21 @@ impl Environment {
         self.variables.insert(name.to_string(), Rc::new(obj));
     }
 
+    fn get(&self, name: &str) -> Option<&Rc<PdObj>> {
+        match &self.shadow {
+            Some(inner) => inner.env.get(name),
+            None => {
+                println!("len is {}", self.x_stack.len());
+                match name {
+                    "X" => self.x_stack.get(self.x_stack.len() - 1),
+                    "Y" => self.x_stack.get(self.x_stack.len() - 2),
+                    "Z" => self.x_stack.get(self.x_stack.len() - 3),
+                    _ => self.variables.get(name)
+                }
+            }
+        }
+    }
+
     fn new() -> Environment {
         Environment {
             stack: Vec::new(),
@@ -183,7 +198,7 @@ pub enum PdObj {
     PdFloat(f64),
     PdChar(char),
     PdString(String),
-    PdList(Vec<Rc<PdObj>>),
+    PdList(Rc<Vec<Rc<PdObj>>>),
     PdBlock(Rc<dyn Block>),
 }
 
@@ -276,11 +291,12 @@ fn floatify(obj: &PdObj) -> Option<f64> {
         _ => None,
     }
 }
-fn seq_range(obj: &PdObj) -> Option<Vec<Rc<PdObj>>> {
+fn seq_range(obj: &PdObj) -> Option<Rc<Vec<Rc<PdObj>>>> {
     match obj {
         // TODO: wasteful to construct the vector :(
-        PdObj::PdInt(a) => Some(num_iter::range(BigInt::from(0), a.clone()).map(|x| Rc::new(PdObj::PdInt(x))).collect()),
+        PdObj::PdInt(a) => Some(Rc::new(num_iter::range(BigInt::from(0), a.clone()).map(|x| Rc::new(PdObj::PdInt(x))).collect())),
         // PdObj::PdInt(a) => Some((BigInt::from(0)..a.clone()).collect()),
+        PdObj::PdList(a) => Some(Rc::clone(a)),
         _ => None,
     }
 }
@@ -360,7 +376,21 @@ impl Block for CasedBuiltIn {
                     done = true;
                     break
                 }
-                None => {}
+                None => {
+                    if accumulated_args.len() >= 2 {
+                        let len = accumulated_args.len();
+                        accumulated_args.swap(len - 1, len - 2);
+                        match case.maybe_run_noncommutatively(env, &accumulated_args) {
+                            Some(res) => {
+                                env.stack.extend(res);
+                                done = true;
+                                break
+                            }
+                            None => {}
+                        };
+                        accumulated_args.swap(len - 1, len - 2);
+                    }
+                }
             }
         }
         if !done {
@@ -386,8 +416,8 @@ impl Block for EachBlock {
             }
             Some(top) => match &*top {
                 PdObj::PdList(vec) => {
-                    for obj in vec {
-                        env.push(Rc::clone(obj));
+                    for obj in &**vec {
+                        env.push(Rc::clone(&obj));
                         self.body.run(env);
                     }
                 }
@@ -422,7 +452,7 @@ impl Block for MapBlock {
             Some(top) => match &*top {
                 PdObj::PdList(vec) => {
                     let res = pd_map(env, &self.body, vec.iter());
-                    env.push(Rc::new(PdObj::PdList(res)));
+                    env.push(Rc::new(PdObj::PdList(Rc::new(res))));
                 }
                 _ => { panic!("each failed") }
             }
@@ -505,14 +535,14 @@ fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailer
 
     let mut last_found: Option<(&'a Rc<PdObj>, &'b[lex::Trailer])> = None;
 
-    if let Some(res) = env.variables.get(leader) {
+    if let Some(res) = env.get(leader) {
         last_found = Some((res, trailers)); // lowest priority
     }
 
     for (i, t) in trailers.iter().enumerate() {
         var.push_str(&t.0);
 
-        if let Some(res) = env.variables.get(&var) {
+        if let Some(res) = env.get(&var) {
             last_found = Some((res, &trailers[i+1..]));
         }
     }
@@ -606,7 +636,7 @@ fn initialize(env: &mut Environment) {
         coerce1: just_block,
         coerce2: seq_range,
         func: |env, a, b| {
-            pd_map(env, a, b.iter())
+            vec![Rc::new(PdObj::PdList(Rc::new(pd_map(env, a, b.iter()))))]
         }
     });
 
@@ -655,7 +685,7 @@ fn initialize(env: &mut Environment) {
         name: "Make_array".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
-            env.push(Rc::new(PdObj::PdList(list)));
+            env.push(Rc::new(PdObj::PdList(Rc::new(list))));
         },
     })));
     env.short_insert("~", PdObj::PdBlock(Rc::new(BuiltIn {
