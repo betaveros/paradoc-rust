@@ -5,6 +5,7 @@ use std::slice::Iter;
 use std::fmt::Debug;
 use std::mem;
 use num::Integer;
+use num_iter;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
 use num_traits::cast::ToPrimitive;
@@ -272,6 +273,20 @@ fn floatify(obj: &PdObj) -> Option<f64> {
         PdObj::PdInt(a) => Some(a.to_f64().unwrap()), // FIXME
         // (we do not want to propagate the option since cases would confusingly fail to apply)
         PdObj::PdFloat(a) => Some(*a),
+        _ => None,
+    }
+}
+fn seq_range(obj: &PdObj) -> Option<Vec<Rc<PdObj>>> {
+    match obj {
+        // TODO: wasteful to construct the vector :(
+        PdObj::PdInt(a) => Some(num_iter::range(BigInt::from(0), a.clone()).map(|x| Rc::new(PdObj::PdInt(x))).collect()),
+        // PdObj::PdInt(a) => Some((BigInt::from(0)..a.clone()).collect()),
+        _ => None,
+    }
+}
+fn just_block(obj: &PdObj) -> Option<Rc<dyn Block>> {
+    match obj {
+        PdObj::PdBlock(a) => Some(Rc::clone(a)),
         _ => None,
     }
 }
@@ -587,6 +602,14 @@ fn initialize(env: &mut Environment) {
         }))));
     };
 
+    let map_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_block,
+        coerce2: seq_range,
+        func: |env, a, b| {
+            pd_map(env, a, b.iter())
+        }
+    });
+
     macro_rules! cc {
         ($($case:expr),*) => {
             vec![$( Rc::clone(&$case), )*];
@@ -597,7 +620,7 @@ fn initialize(env: &mut Environment) {
     add_cases("-", cc![minus_case, fminus_case]);
     add_cases("*", cc![times_case, ftimes_case]);
     add_cases("/", cc![div_case]);
-    add_cases("%", cc![mod_case, fmod_case]);
+    add_cases("%", cc![mod_case, fmod_case, map_case]);
     add_cases("÷", cc![intdiv_case, fintdiv_case]);
     add_cases("(", cc![dec_case]);
     add_cases(")", cc![inc_case]);
