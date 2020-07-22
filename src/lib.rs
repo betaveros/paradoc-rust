@@ -1,6 +1,7 @@
 #[macro_use] extern crate lazy_static;
 
 use std::rc::Rc;
+use std::slice::Iter;
 use std::fmt::Debug;
 use std::mem;
 use num::Integer;
@@ -100,6 +101,24 @@ impl Environment {
         }
     }
 
+    fn push_x(&mut self, obj: Rc<PdObj>) {
+        self.x_stack.push(obj)
+    }
+
+    fn push_yx(&mut self) {
+        self.push_x(Rc::new(PdObj::PdString("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+        self.push_x(Rc::new(PdObj::PdString("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+    }
+    fn set_yx(&mut self, y: Rc<PdObj>, x: Rc<PdObj>) {
+        let len = self.x_stack.len();
+        self.x_stack[len - 2] = y;
+        self.x_stack[len - 1] = x;
+    }
+    fn pop_yx(&mut self) {
+        self.x_stack.pop();
+        self.x_stack.pop();
+    }
+
     fn short_insert(&mut self, name: &str, obj: PdObj) {
         self.variables.insert(name.to_string(), Rc::new(obj));
     }
@@ -182,6 +201,9 @@ impl PartialEq for PdObj {
 
 impl From<i32> for PdObj {
     fn from(x: i32) -> Self { PdObj::PdInt(x.to_bigint().unwrap()) }
+}
+impl From<usize> for PdObj {
+    fn from(x: usize) -> Self { PdObj::PdInt(x.to_bigint().unwrap()) }
 }
 
 struct BuiltIn {
@@ -363,21 +385,28 @@ impl Block for EachBlock {
     }
 }
 
+// TODO: handle continue/break (have fun!)
+fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: Iter<Rc<PdObj>>) -> Vec<Rc<PdObj>> {
+    env.push_yx();
+    let res = it.enumerate().flat_map(|(i, obj)| {
+        env.set_yx(Rc::new(PdObj::from(i)), Rc::clone(obj));
+        sandbox(env, &func, vec![Rc::clone(obj)])
+    }).collect();
+    env.pop_yx();
+    res
+}
+
 #[derive(Debug)]
 struct MapBlock {
     body: Rc<dyn Block>,
 }
 impl Block for MapBlock {
     fn run(&self, env: &mut Environment) {
-        // TODO: literally everything
-        // Extract into sandbox; push x-stack; handle continue/breaks
         match env.pop() {
             None => panic!("map no stack"),
             Some(top) => match &*top {
                 PdObj::PdList(vec) => {
-                    let res = vec.iter().flat_map(|obj| {
-                        sandbox(env, &self.body, vec![Rc::clone(obj)])
-                    }).collect();
+                    let res = pd_map(env, &self.body, vec.iter());
                     env.push(Rc::new(PdObj::PdList(res)));
                 }
                 _ => { panic!("each failed") }
