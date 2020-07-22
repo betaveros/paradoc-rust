@@ -219,6 +219,26 @@ impl Case for UnaryAnyCase {
     }
 }
 
+struct BinaryAnyCase {
+    func: fn(&mut Environment, &Rc<PdObj>, &Rc<PdObj>) -> Vec<Rc<PdObj>>,
+}
+impl Case for BinaryAnyCase {
+    fn arity(&self) -> usize { 2 }
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> Option<Vec<Rc<PdObj>>> {
+        Some((self.func)(env, &args[0], &args[1]))
+    }
+}
+
+struct TernaryAnyCase {
+    func: fn(&mut Environment, &Rc<PdObj>, &Rc<PdObj>, &Rc<PdObj>) -> Vec<Rc<PdObj>>,
+}
+impl Case for TernaryAnyCase {
+    fn arity(&self) -> usize { 3 }
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> Option<Vec<Rc<PdObj>>> {
+        Some((self.func)(env, &args[0], &args[1], &args[2]))
+    }
+}
+
 fn just_int(obj: &PdObj) -> Option<BigInt> {
     match obj {
         PdObj::PdInt(a) => Some(a.clone()),
@@ -439,19 +459,21 @@ fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailer
 
     let mut var: String = leader.to_string();
 
+    let mut last_found: Option<(&'a Rc<PdObj>, &'b[lex::Trailer])> = None;
+
     if let Some(res) = env.variables.get(leader) {
-        return Some((res, trailers));
+        last_found = Some((res, trailers)); // lowest priority
     }
 
     for (i, t) in trailers.iter().enumerate() {
         var.push_str(&t.0);
 
-        if let Some(res) = env.variables.get(leader) {
-            return Some((res, &trailers[i+1..]));
+        if let Some(res) = env.variables.get(&var) {
+            last_found = Some((res, &trailers[i+1..]));
         }
     }
 
-    None
+    last_found
 }
 
 impl Block for CodeBlock {
@@ -466,6 +488,7 @@ impl Block for CodeBlock {
                 RcLeader::Var(s) => {
                     match lookup_and_break_trailers(env, s, trailer) {
                         Some((obj, rest)) => {
+                            println!("test {:?} {:?}", obj, rest);
                             apply_all_trailers(Rc::clone(obj), false, rest).unwrap()
                         }
                         None => { panic!("undefined var"); }
@@ -527,7 +550,6 @@ fn initialize(env: &mut Environment) {
 
     let inc_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a + 1))] });
     let dec_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a - 1))] });
-    let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| vec![Rc::clone(a), Rc::clone(a)] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
         env.variables.insert(name.to_string(), Rc::new(PdObj::PdBlock(Rc::new(CasedBuiltIn {
@@ -550,7 +572,19 @@ fn initialize(env: &mut Environment) {
     add_cases("÷", cc![intdiv_case, fintdiv_case]);
     add_cases("(", cc![dec_case]);
     add_cases(")", cc![inc_case]);
+
+    let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![a, a] });
     add_cases(":", cc![dup_case]);
+    let dup_pair_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| cc![a, b, a, b] });
+    add_cases(":p", cc![dup_pair_case]);
+    let dup_around_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| cc![a, b, a] });
+    add_cases(":a", cc![dup_around_case]);
+    let swap_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| cc![b, a] });
+    add_cases("\\", cc![swap_case]);
+    let swap_in_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, a, b, c| cc![c, a, b] });
+    add_cases("\\i", cc![swap_in_case]);
+    let swap_out_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, a, b, c| cc![b, c, a] });
+    add_cases("\\o", cc![swap_out_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::PdChar('\n'));

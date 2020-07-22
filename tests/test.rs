@@ -34,3 +34,14 @@ fn each() {
     assert_eq!(paradoc::simple_eval("[3 4]:e"), vec![int(3), int(3), int(4), int(4)]);
     assert_eq!(paradoc::simple_eval("[3 4]{2*1+}e"), vec![int(7), int(9)]);
 }
+
+#[test]
+fn stack_manip() {
+    assert_eq!(paradoc::simple_eval("3 4:" ), vec![int(3), int(4), int(4)]);
+    assert_eq!(paradoc::simple_eval("3 4:p"), vec![int(3), int(4), int(3), int(4)]);
+    assert_eq!(paradoc::simple_eval("3 4:a"), vec![int(3), int(4), int(3)]);
+    assert_eq!(paradoc::simple_eval("3 4\\"), vec![int(4), int(3)]);
+
+    assert_eq!(paradoc::simple_eval("3 4 5\\o"), vec![int(4), int(5), int(3)]);
+    assert_eq!(paradoc::simple_eval("3 4 5\\i"), vec![int(5), int(3), int(4)]);
+}
