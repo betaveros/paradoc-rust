@@ -416,19 +416,14 @@ impl Block for EachBlock {
     fn run(&self, env: &mut Environment) {
         // TODO: literally everything
         // Extract into sandbox; push x-stack; handle continue/breaks
-        match env.pop() {
-            None => {
-                panic!("each no stack")
-            }
-            Some(top) => match &*top {
-                PdObj::PdList(vec) => {
-                    for obj in &**vec {
-                        env.push(Rc::clone(&obj));
-                        self.body.run(env);
-                    }
+        match seq_range(&*env.pop_or_panic("each no stack")) {
+            Some(vec) => {
+                for obj in &**vec {
+                    env.push(Rc::clone(&obj));
+                    self.body.run(env);
                 }
-                _ => { panic!("each failed") }
             }
+            _ => { panic!("each failed") }
         }
     }
     fn code_repr(&self) -> String {
@@ -453,19 +448,16 @@ struct MapBlock {
 }
 impl Block for MapBlock {
     fn run(&self, env: &mut Environment) {
-        match env.pop() {
-            None => panic!("map no stack"),
-            Some(top) => match &*top {
-                PdObj::PdList(vec) => {
-                    let res = pd_map(env, &self.body, vec.iter());
-                    env.push(Rc::new(PdObj::PdList(Rc::new(res))));
-                }
-                _ => { panic!("each failed") }
+        match seq_range(&*env.pop_or_panic("map no stack")) {
+            Some(vec) => {
+                let res = pd_map(env, &self.body, vec.iter());
+                env.push(Rc::new(PdObj::PdList(Rc::new(res))));
             }
+            _ => { panic!("map coercion failed") }
         }
     }
     fn code_repr(&self) -> String {
-        self.body.code_repr() + "_each"
+        self.body.code_repr() + "_map"
     }
 }
 
@@ -697,8 +689,7 @@ fn initialize(env: &mut Environment) {
     env.short_insert("~", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
-            let obj = env.pop_or_panic("~ failed");
-            match &*obj {
+            match &*env.pop_or_panic("~ failed") {
                 PdObj::PdBlock(bb) => { bb.run(env); }
                 PdObj::PdList(ls) => { env.extend_clone(ls); }
                 _ => { panic!("~ can't handle"); }
