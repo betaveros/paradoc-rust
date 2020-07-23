@@ -1,5 +1,6 @@
 #[macro_use] extern crate lazy_static;
 
+use std::cmp::Ordering;
 use std::rc::Rc;
 use std::slice::Iter;
 use std::fmt::Debug;
@@ -207,7 +208,7 @@ impl Environment {
 
         let ret = body(&mut benv);
 
-        let shadow = benv.shadow.unwrap();
+        let shadow = benv.shadow.expect("Bracketed shadow disappeared!?!?");
         let arity = shadow.arity;
         mem::replace(self, *(shadow.env));
 
@@ -227,7 +228,6 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) ->
         inner.take_stack()
     })
 }
-
 #[derive(Debug)]
 pub enum PdObj {
     PdInt(BigInt),
@@ -238,10 +238,27 @@ pub enum PdObj {
     PdBlock(Rc<dyn Block>),
 }
 
+// this seems... nontrivial??
+fn cmp_bigint_f64(a: &BigInt, b: &f64) -> Option<Ordering> {
+    if let Some(bi) = b.to_bigint() {
+        Some(a.cmp(&bi))
+    } else {
+        b.floor().to_bigint().map(|bi| {
+            match a.cmp(&bi) {
+                Ordering::Less    => Ordering::Less,
+                Ordering::Equal   => Ordering::Less,
+                Ordering::Greater => Ordering::Greater,
+            }
+        })
+    }
+}
+
 impl PartialEq for PdObj {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (PdObj::PdInt   (a), PdObj::PdInt   (b)) => a == b,
+            (PdObj::PdInt   (a), PdObj::PdFloat (b)) => b.to_bigint().map_or(false, |x| &x == a),
+            (PdObj::PdFloat (a), PdObj::PdInt   (b)) => a.to_bigint().map_or(false, |x| &x == b),
             (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a == b,
             (PdObj::PdChar  (a), PdObj::PdChar  (b)) => a == b,
             (PdObj::PdString(a), PdObj::PdString(b)) => a == b,
@@ -251,11 +268,26 @@ impl PartialEq for PdObj {
     }
 }
 
+impl PartialOrd for PdObj {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (PdObj::PdInt   (a), PdObj::PdInt   (b)) => Some(a.cmp(b)),
+            (PdObj::PdInt   (a), PdObj::PdFloat (b)) => cmp_bigint_f64(a, b),
+            (PdObj::PdFloat (a), PdObj::PdInt   (b)) => cmp_bigint_f64(b, a).map(|ord| ord.reverse()),
+            (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a.partial_cmp(b),
+            (PdObj::PdChar  (a), PdObj::PdChar  (b)) => Some(a.cmp(b)),
+            (PdObj::PdString(a), PdObj::PdString(b)) => Some(a.cmp(b)),
+            (PdObj::PdList  (a), PdObj::PdList  (b)) => a.partial_cmp(b),
+            _ => None,
+        }
+    }
+}
+
 impl From<i32> for PdObj {
-    fn from(x: i32) -> Self { PdObj::PdInt(x.to_bigint().unwrap()) }
+    fn from(x: i32) -> Self { PdObj::PdInt(BigInt::from(x)) }
 }
 impl From<usize> for PdObj {
-    fn from(x: usize) -> Self { PdObj::PdInt(x.to_bigint().unwrap()) }
+    fn from(x: usize) -> Self { PdObj::PdInt(BigInt::from(x)) }
 }
 
 struct BuiltIn {
@@ -321,7 +353,7 @@ fn just_int(obj: &PdObj) -> Option<BigInt> {
 }
 fn floatify(obj: &PdObj) -> Option<f64> {
     match obj {
-        PdObj::PdInt(a) => Some(a.to_f64().unwrap()), // FIXME
+        PdObj::PdInt(a) => Some(a.to_f64().expect("BigInt too large to floatify?")), // FIXME
         // (we do not want to propagate the option since cases would confusingly fail to apply)
         PdObj::PdFloat(a) => Some(*a),
         _ => None,
@@ -673,16 +705,11 @@ impl Block for CodeBlock {
             // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    apply_all_trailers(Rc::clone(obj), true, trailer).unwrap()
+                    apply_all_trailers(Rc::clone(obj), true, trailer).expect("Could not apply trailers to literal")
                 }
                 RcLeader::Var(s) => {
-                    match lookup_and_break_trailers(env, s, trailer) {
-                        Some((obj, rest)) => {
-                            println!("test {:?} {:?}", obj, rest);
-                            apply_all_trailers(Rc::clone(obj), false, rest).unwrap()
-                        }
-                        None => { panic!("undefined var"); }
-                    }
+                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).expect("Undefined variable!");
+                    apply_all_trailers(Rc::clone(obj), false, rest).expect("Could not apply trailers to variable")
                 }
             };
 
@@ -731,6 +758,11 @@ macro_rules! ii_i {
         binary_int_case(|_, $a, $b| vec![Rc::new(PdObj::PdInt($x))])
     };
 }
+macro_rules! ff_i {
+    ($a:ident, $b:ident, $x:expr) => {
+        binary_floatify_case(|_, $a, $b| vec![Rc::new(PdObj::PdInt($x))])
+    };
+}
 macro_rules! ff_f {
     ($a:ident, $b:ident, $x:expr) => {
         binary_floatify_case(|_, $a, $b| vec![Rc::new(PdObj::PdFloat($x))])
@@ -765,22 +797,27 @@ fn initialize(env: &mut Environment) {
     let finc2_case = f_f![a, a + 2.0];
     let fdec2_case = f_f![a, a - 2.0];
 
-    let fceil_case  = f_i![a, a.ceil().to_bigint().unwrap()];
-    let ffloor_case = f_i![a, a.floor().to_bigint().unwrap()];
+    let fceil_case  = f_i![a, a.ceil().to_bigint().expect("Ceiling of float was not integer")];
+    let ffloor_case = f_i![a, a.floor().to_bigint().expect("Floor of float was not integer")];
+
+    let ilt_case = ii_i![a, b, if a < b { BigInt::from(1) } else { BigInt::from(0) }];
+    let flt_case = ff_i![a, b, if a < b { BigInt::from(1) } else { BigInt::from(0) }];
+    let igt_case = ii_i![a, b, if a > b { BigInt::from(1) } else { BigInt::from(0) }];
+    let fgt_case = ff_i![a, b, if a > b { BigInt::from(1) } else { BigInt::from(0) }];
 
     let uncons_case = unary_seq_range_case(|_, a| {
-        let (x, xs) = a.split_first().unwrap();
+        let (x, xs) = a.split_first().expect("Uncons of empty list");
         vec![pd_list(xs.to_vec()), Rc::clone(x)]
     });
-    let first_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.first().unwrap())] });
-    let rest_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_first().unwrap().1.to_vec())] });
+    let first_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.first().expect("First of empty list"))] });
+    let rest_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_first().expect("Rest of empty list").1.to_vec())] });
 
     let unsnoc_case = unary_seq_range_case(|_, a| {
-        let (x, xs) = a.split_last().unwrap();
+        let (x, xs) = a.split_last().expect("Unsnoc of empty list");
         vec![pd_list(xs.to_vec()), Rc::clone(x)]
     });
-    let last_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.last().unwrap())] });
-    let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_last().unwrap().1.to_vec())] });
+    let last_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.last().expect("Last of empty list"))] });
+    let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_last().expect("Butlast of empty list").1.to_vec())] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
         env.variables.insert(name.to_string(), Rc::new(PdObj::PdBlock(Rc::new(CasedBuiltIn {
@@ -813,6 +850,9 @@ fn initialize(env: &mut Environment) {
     add_cases("÷", cc![intdiv_case, fintdiv_case]);
     add_cases("(", cc![dec_case, fdec_case, uncons_case]);
     add_cases(")", cc![inc_case, finc_case, unsnoc_case]);
+    add_cases("<", cc![ilt_case, flt_case]);
+    add_cases(">", cc![igt_case, fgt_case]);
+    add_cases("‹", cc![id_int_case, ffloor_case, first_case]);
     add_cases("‹", cc![id_int_case, ffloor_case, first_case]);
     add_cases("›", cc![id_int_case, fceil_case, last_case]);
     add_cases("«", cc![dec2_case, fdec2_case, butlast_case]);

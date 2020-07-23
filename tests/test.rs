@@ -1,9 +1,9 @@
 use std::rc::Rc;
-use num::bigint::ToBigInt;
+use num::bigint::BigInt;
 extern crate paradoc;
 
 fn int(x: i32) -> Rc<paradoc::PdObj> {
-    Rc::new(paradoc::PdObj::PdInt(x.to_bigint().unwrap()))
+    Rc::new(paradoc::PdObj::PdInt(BigInt::from(x)))
 }
 
 fn list(xs: Vec<Rc<paradoc::PdObj>>) -> Rc<paradoc::PdObj> {
