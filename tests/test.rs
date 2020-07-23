@@ -10,11 +10,23 @@ fn list(xs: Vec<Rc<paradoc::PdObj>>) -> Rc<paradoc::PdObj> {
     Rc::new(paradoc::PdObj::PdList(Rc::new(xs)))
 }
 
+
+macro_rules! intvec {
+    ($($case:expr),*) => {
+        vec![$( int($case), )*];
+    }
+}
+
 #[test]
 fn basic() {
-    assert_eq!(paradoc::simple_eval("3 4+"), vec![int(7)]);
-    assert_eq!(paradoc::simple_eval("3:"), vec![int(3), int(3)]);
-    assert_eq!(paradoc::simple_eval("11 7%"), vec![int(4)]);
+    assert_eq!(paradoc::simple_eval("3 4+"), intvec![7]);
+    assert_eq!(paradoc::simple_eval("3:"), intvec![3, 3]);
+    assert_eq!(paradoc::simple_eval("11 7%"), intvec![4]);
+}
+
+#[test]
+fn readme() {
+    assert_eq!(paradoc::simple_eval("¹²m"), vec![list(intvec![0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100])]);
 }
 
 #[test]
@@ -24,8 +36,8 @@ fn test_list() {
 
 #[test]
 fn map() {
-    assert_eq!(paradoc::simple_eval("[3 4])m"), vec![list(vec![int(4), int(5)])]);
-    assert_eq!(paradoc::simple_eval("[3 4]{Y+}%"), vec![list(vec![int(3), int(5)])]);
+    assert_eq!(paradoc::simple_eval("[3 4])m"), vec![list(intvec![4, 5])]);
+    assert_eq!(paradoc::simple_eval("[3 4]{Y+}%"), vec![list(intvec![3, 5])]);
 }
 
 #[test]
@@ -35,18 +47,18 @@ fn block() {
 
 #[test]
 fn each() {
-    assert_eq!(paradoc::simple_eval("[3 4]{:}e"), vec![int(3), int(3), int(4), int(4)]);
-    assert_eq!(paradoc::simple_eval("[3 4]:e"), vec![int(3), int(3), int(4), int(4)]);
-    assert_eq!(paradoc::simple_eval("[3 4]{2*1+}e"), vec![int(7), int(9)]);
+    assert_eq!(paradoc::simple_eval("[3 4]{:}e"), intvec![3, 3, 4, 4]);
+    assert_eq!(paradoc::simple_eval("[3 4]:e"), intvec![3, 3, 4, 4]);
+    assert_eq!(paradoc::simple_eval("[3 4]{2*1+}e"), intvec![7, 9]);
 }
 
 #[test]
 fn stack_manip() {
-    assert_eq!(paradoc::simple_eval("3 4:" ), vec![int(3), int(4), int(4)]);
-    assert_eq!(paradoc::simple_eval("3 4:p"), vec![int(3), int(4), int(3), int(4)]);
-    assert_eq!(paradoc::simple_eval("3 4:a"), vec![int(3), int(4), int(3)]);
-    assert_eq!(paradoc::simple_eval("3 4\\"), vec![int(4), int(3)]);
+    assert_eq!(paradoc::simple_eval("3 4:" ), intvec![3, 4, 4]);
+    assert_eq!(paradoc::simple_eval("3 4:p"), intvec![3, 4, 3, 4]);
+    assert_eq!(paradoc::simple_eval("3 4:a"), intvec![3, 4, 3]);
+    assert_eq!(paradoc::simple_eval("3 4\\"), intvec![4, 3]);
 
-    assert_eq!(paradoc::simple_eval("3 4 5\\o"), vec![int(4), int(5), int(3)]);
-    assert_eq!(paradoc::simple_eval("3 4 5\\i"), vec![int(5), int(3), int(4)]);
+    assert_eq!(paradoc::simple_eval("3 4 5\\o"), intvec![4, 5, 3]);
+    assert_eq!(paradoc::simple_eval("3 4 5\\i"), intvec![5, 3, 4]);
 }

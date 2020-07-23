@@ -638,6 +638,8 @@ fn initialize(env: &mut Environment) {
         }
     });
 
+    let square_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a * a))] });
+
     macro_rules! cc {
         ($($case:expr),*) => {
             vec![$( Rc::clone(&$case), )*];
@@ -652,6 +654,7 @@ fn initialize(env: &mut Environment) {
     add_cases("÷", cc![intdiv_case, fintdiv_case]);
     add_cases("(", cc![dec_case]);
     add_cases(")", cc![inc_case]);
+    add_cases("²", cc![square_case]);
 
     let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![a, a] });
     add_cases(":", cc![dup_case]);
@@ -669,6 +672,9 @@ fn initialize(env: &mut Environment) {
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::PdChar('\n'));
     env.short_insert("A", PdObj::from(10));
+    env.short_insert("¹", PdObj::from(11));
+    env.short_insert("∅", PdObj::from(0));
+    env.short_insert("α", PdObj::from(1));
     env.short_insert("Ep", PdObj::PdFloat(1e-9));
 
     env.short_insert(" ", PdObj::PdBlock(Rc::new(BuiltIn {
