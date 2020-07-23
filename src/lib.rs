@@ -23,17 +23,33 @@ pub struct Environment {
     shadow: Option<ShadowState>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ShadowType {
+    Normal,
+    Keep,
+}
+
 #[derive(Debug)]
 pub struct ShadowState {
     env: Box<Environment>,
     arity: usize,
+    shadow_type: ShadowType,
 }
 
 impl ShadowState {
     fn pop(&mut self) -> Option<Rc<PdObj>> {
-        let res = self.env.pop();
-        if res.is_some() { self.arity += 1; }
-        res
+        match self.shadow_type {
+            ShadowType::Normal => {
+                let res = self.env.pop();
+                if res.is_some() { self.arity += 1; }
+                res
+            }
+            ShadowType::Keep => {
+                let res = self.env.stack.get(self.env.stack.len() - 1 - self.arity);
+                if res.is_some() { self.arity += 1; }
+                res.map(Rc::clone)
+            }
+        }
     }
 }
 
@@ -83,6 +99,14 @@ impl Environment {
             None => { panic!(panic_msg); }
             Some(x) => x
         }
+    }
+    fn pop_n_or_panic(&mut self, n: usize, panic_msg: &'static str) -> Vec<Rc<PdObj>> {
+        let mut ret: Vec<Rc<PdObj>> = Vec::new();
+        for _ in 0..n {
+            ret.push(self.pop_or_panic(panic_msg));
+        }
+        ret.reverse();
+        ret
     }
 
     fn take_stack(&mut self) -> Vec<Rc<PdObj>> {
@@ -166,7 +190,11 @@ impl Environment {
         }
     }
 
-    fn run_on_bracketed_shadow<T>(&mut self, body: impl FnOnce(&mut Environment) -> T) -> T {
+    fn run_on_bracketed_shadow<T>(&mut self, shadow_type: ShadowType, body: impl FnOnce(&mut Environment) -> T) -> T {
+        self.run_on_bracketed_shadow_with_arity(shadow_type, body).0
+    }
+
+    fn run_on_bracketed_shadow_with_arity<T>(&mut self, shadow_type: ShadowType, body: impl FnOnce(&mut Environment) -> T) -> (T, usize) {
         let env = mem::replace(self, Environment::new());
 
         let mut benv = Environment {
@@ -174,14 +202,16 @@ impl Environment {
             x_stack: Vec::new(),
             variables: HashMap::new(),
             marker_stack: vec![0],
-            shadow: Some(ShadowState { env: Box::new(env), arity: 0 }),
+            shadow: Some(ShadowState { env: Box::new(env), arity: 0, shadow_type }),
         };
 
         let ret = body(&mut benv);
 
-        mem::replace(self, *(benv.shadow.unwrap().env));
+        let shadow = benv.shadow.unwrap();
+        let arity = shadow.arity;
+        mem::replace(self, *(shadow.env));
 
-        ret
+        (ret, arity)
     }
 }
 
@@ -191,7 +221,7 @@ pub trait Block : Debug {
 }
 
 fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) -> Vec<Rc<PdObj>> {
-    env.run_on_bracketed_shadow(|inner| {
+    env.run_on_bracketed_shadow(ShadowType::Normal, |inner| {
         inner.extend(args);
         func.run(inner);
         inner.take_stack()
@@ -476,6 +506,41 @@ impl Block for UnderBlock {
     }
 }
 
+#[derive(Debug)]
+struct KeepBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for KeepBlock {
+    fn run(&self, env: &mut Environment) {
+        let res = env.run_on_bracketed_shadow(ShadowType::Keep, |inner| {
+            self.body.run(inner);
+            inner.take_stack()
+        });
+        env.extend(res);
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_keep"
+    }
+}
+
+#[derive(Debug)]
+struct KeepUnderBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for KeepUnderBlock {
+    fn run(&self, env: &mut Environment) {
+        let (res, arity) = env.run_on_bracketed_shadow_with_arity(ShadowType::Keep, |inner| {
+            self.body.run(inner);
+            inner.take_stack()
+        });
+        let temp = env.pop_n_or_panic(arity, "keepunder stack failed");
+        env.extend(res);
+        env.extend(temp);
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_keepunder"
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum RcLeader {
@@ -527,6 +592,18 @@ fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, 
             "m" | "_m" | "_map" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
                 Some((Rc::new(PdObj::PdBlock(Rc::new(MapBlock { body }))), false))
+            }
+            "u" | "_u" | "_under" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::PdBlock(Rc::new(UnderBlock { body }))), false))
+            }
+            "k" | "_k" | "_keep" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::PdBlock(Rc::new(KeepBlock { body }))), false))
+            }
+            "q" | "_q" | "_keepunder" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::PdBlock(Rc::new(KeepUnderBlock { body }))), false))
             }
             _ => None
         }

@@ -62,3 +62,10 @@ fn stack_manip() {
     assert_eq!(paradoc::simple_eval("3 4 5\\o"), intvec![4, 5, 3]);
     assert_eq!(paradoc::simple_eval("3 4 5\\i"), intvec![5, 3, 4]);
 }
+
+#[test]
+fn stack_manip_trailer() {
+    assert_eq!(paradoc::simple_eval("3 4 5+u" ), intvec![7, 5]);
+    assert_eq!(paradoc::simple_eval("3 4 5+k" ), intvec![3, 4, 5, 9]);
+    assert_eq!(paradoc::simple_eval("3 4 5+q" ), intvec![3, 9, 4, 5]);
+}
