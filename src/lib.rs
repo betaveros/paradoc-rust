@@ -461,6 +461,22 @@ impl Block for MapBlock {
     }
 }
 
+#[derive(Debug)]
+struct UnderBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for UnderBlock {
+    fn run(&self, env: &mut Environment) {
+        let obj = env.pop_or_panic("under no stack");
+        self.body.run(env);
+        env.push(obj);
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_under"
+    }
+}
+
+
 #[derive(Debug, PartialEq)]
 pub enum RcLeader {
     Lit(Rc<PdObj>),
