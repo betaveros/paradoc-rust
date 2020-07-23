@@ -359,6 +359,22 @@ impl Case for UnaryIntCase {
     }
 }
 
+struct UnaryCase<T> {
+    coerce: fn(&PdObj) -> Option<T>,
+    func: fn(&mut Environment, &T) -> Vec<Rc<PdObj>>,
+}
+impl<T> Case for UnaryCase<T> {
+    fn arity(&self) -> usize { 1 }
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> Option<Vec<Rc<PdObj>>> {
+        match (self.coerce)(&*args[0]) {
+            Some(a) => {
+                Some((self.func)(env, &a))
+            }
+            _ => None
+        }
+    }
+}
+
 struct BinaryCase<T1, T2> {
     coerce1: fn(&PdObj) -> Option<T1>,
     coerce2: fn(&PdObj) -> Option<T2>,
@@ -375,11 +391,20 @@ impl<T1, T2> Case for BinaryCase<T1, T2> {
         }
     }
 }
+fn unary_int_case(func: fn(&mut Environment, &BigInt) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
+    Rc::new(UnaryCase { coerce: just_int, func })
+}
+fn unary_floatify_case(func: fn(&mut Environment, &f64) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
+    Rc::new(UnaryCase { coerce: floatify, func })
+}
 fn binary_int_case(func: fn(&mut Environment, &BigInt, &BigInt) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
     Rc::new(BinaryCase { coerce1: just_int, coerce2: just_int, func })
 }
 fn binary_floatify_case(func: fn(&mut Environment, &f64, &f64) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
     Rc::new(BinaryCase { coerce1: floatify, coerce2: floatify, func })
+}
+fn unary_seq_range_case(func: fn(&mut Environment, &Rc<Vec<Rc<PdObj>>>) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
+    Rc::new(UnaryCase { coerce: seq_range, func })
 }
 struct CasedBuiltIn {
     name: String,
@@ -686,6 +711,21 @@ fn apply_on(env: &mut Environment, obj: Rc<PdObj>) {
     }
 }
 
+macro_rules! i_i {
+    ($a:ident, $x:expr) => {
+        unary_int_case(|_, $a| vec![Rc::new(PdObj::PdInt($x))])
+    };
+}
+macro_rules! f_f {
+    ($a:ident, $x:expr) => {
+        unary_floatify_case(|_, $a| vec![Rc::new(PdObj::PdFloat($x))])
+    };
+}
+macro_rules! f_i {
+    ($a:ident, $x:expr) => {
+        unary_floatify_case(|_, $a| vec![Rc::new(PdObj::PdInt($x))])
+    };
+}
 macro_rules! ii_i {
     ($a:ident, $b:ident, $x:expr) => {
         binary_int_case(|_, $a, $b| vec![Rc::new(PdObj::PdInt($x))])
@@ -702,6 +742,8 @@ macro_rules! numfs {
     }
 }
 
+fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::PdList(Rc::new(xs))) }
+
 fn initialize(env: &mut Environment) {
     let (plus_case,  fplus_case ) = numfs![a, b, a + b];
     let (minus_case, fminus_case) = numfs![a, b, a - b];
@@ -713,8 +755,32 @@ fn initialize(env: &mut Environment) {
     let intdiv_case = ii_i![a, b, Integer::div_floor(a, b)];
     let fintdiv_case = ff_f![a, b, a.div_euclid(*b)];
 
-    let inc_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a + 1))] });
-    let dec_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a - 1))] });
+    let id_int_case = i_i![a, a.clone()];
+    let inc_case   = i_i![a, a + 1];
+    let dec_case   = i_i![a, a - 1];
+    let inc2_case  = i_i![a, a + 2];
+    let dec2_case  = i_i![a, a - 2];
+    let finc_case  = f_f![a, a + 1.0];
+    let fdec_case  = f_f![a, a - 1.0];
+    let finc2_case = f_f![a, a + 2.0];
+    let fdec2_case = f_f![a, a - 2.0];
+
+    let fceil_case  = f_i![a, a.ceil().to_bigint().unwrap()];
+    let ffloor_case = f_i![a, a.floor().to_bigint().unwrap()];
+
+    let uncons_case = unary_seq_range_case(|_, a| {
+        let (x, xs) = a.split_first().unwrap();
+        vec![pd_list(xs.to_vec()), Rc::clone(x)]
+    });
+    let first_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.first().unwrap())] });
+    let rest_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_first().unwrap().1.to_vec())] });
+
+    let unsnoc_case = unary_seq_range_case(|_, a| {
+        let (x, xs) = a.split_last().unwrap();
+        vec![pd_list(xs.to_vec()), Rc::clone(x)]
+    });
+    let last_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.last().unwrap())] });
+    let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_last().unwrap().1.to_vec())] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
         env.variables.insert(name.to_string(), Rc::new(PdObj::PdBlock(Rc::new(CasedBuiltIn {
@@ -727,7 +793,7 @@ fn initialize(env: &mut Environment) {
         coerce1: just_block,
         coerce2: seq_range,
         func: |env, a, b| {
-            vec![Rc::new(PdObj::PdList(Rc::new(pd_map(env, a, b.iter()))))]
+            vec![pd_list(pd_map(env, a, b.iter()))]
         }
     });
 
@@ -745,8 +811,12 @@ fn initialize(env: &mut Environment) {
     add_cases("/", cc![div_case]);
     add_cases("%", cc![mod_case, fmod_case, map_case]);
     add_cases("÷", cc![intdiv_case, fintdiv_case]);
-    add_cases("(", cc![dec_case]);
-    add_cases(")", cc![inc_case]);
+    add_cases("(", cc![dec_case, fdec_case, uncons_case]);
+    add_cases(")", cc![inc_case, finc_case, unsnoc_case]);
+    add_cases("‹", cc![id_int_case, ffloor_case, first_case]);
+    add_cases("›", cc![id_int_case, fceil_case, last_case]);
+    add_cases("«", cc![dec2_case, fdec2_case, butlast_case]);
+    add_cases("»", cc![inc2_case, finc2_case, rest_case]);
     add_cases("²", cc![square_case]);
 
     let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![a, a] });
