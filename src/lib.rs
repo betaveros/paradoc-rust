@@ -669,6 +669,15 @@ fn initialize(env: &mut Environment) {
     let swap_out_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, a, b, c| cc![b, c, a] });
     add_cases("\\o", cc![swap_out_case]);
 
+    let pop_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, _a| cc![] });
+    add_cases(";", cc![pop_case]);
+    let pop_out_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, b, c| cc![b, c] });
+    add_cases(";o", cc![pop_out_case]);
+    let pop_pair_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, _b, c| cc![c] });
+    add_cases(";p", cc![pop_pair_case]);
+    let pop_around_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, b, _c| cc![b] });
+    add_cases(";a", cc![pop_around_case]);
+
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::PdChar('\n'));
     env.short_insert("A", PdObj::from(10));
