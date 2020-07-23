@@ -78,6 +78,12 @@ impl Environment {
         }
         // TODO: stack trigger
     }
+    fn pop_or_panic(&mut self, panic_msg: &'static str) -> Rc<PdObj> {
+        match self.pop() {
+            None => { panic!(panic_msg); }
+            Some(x) => x
+        }
+    }
 
     fn take_stack(&mut self) -> Vec<Rc<PdObj>> {
         mem::take(&mut self.stack)
@@ -691,44 +697,26 @@ fn initialize(env: &mut Environment) {
     env.short_insert("~", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
-            match env.pop() {
-                None => { panic!("~_~"); }
-                Some(x) => {
-                    match &*x {
-                        PdObj::PdBlock(bb) => {
-                            bb.run(env);
-                        }
-                        PdObj::PdList(ls) => {
-                            env.extend_clone(ls);
-                        }
-                        _ => {
-                            panic!("~ what");
-                        }
-                    }
-                }
+            let obj = env.pop_or_panic("~ failed");
+            match &*obj {
+                PdObj::PdBlock(bb) => { bb.run(env); }
+                PdObj::PdList(ls) => { env.extend_clone(ls); }
+                _ => { panic!("~ can't handle"); }
             }
         },
     })));
     env.short_insert("O", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Print".to_string(),
         func: |env| {
-            match env.pop() {
-                None => { panic!("~_~"); }
-                Some(x) => {
-                    print!("{}", env.to_string(&x));
-                }
-            }
+            let obj = env.pop_or_panic("O failed");
+            print!("{}", env.to_string(&obj));
         },
     })));
     env.short_insert("P", PdObj::PdBlock(Rc::new(BuiltIn {
         name: "Print".to_string(),
         func: |env| {
-            match env.pop() {
-                None => { panic!("~_~"); }
-                Some(x) => {
-                    println!("{}", env.to_string(&x));
-                }
-            }
+            let obj = env.pop_or_panic("P failed");
+            println!("{}", env.to_string(&obj));
         },
     })));
 }
