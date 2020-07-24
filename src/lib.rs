@@ -258,8 +258,12 @@ impl PartialEq for PdObj {
         match (self, other) {
             (PdObj::PdInt   (a), PdObj::PdInt   (b)) => a == b,
             (PdObj::PdInt   (a), PdObj::PdFloat (b)) => b.to_bigint().map_or(false, |x| &x == a),
+            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => a == &BigInt::from(*b as u32),
             (PdObj::PdFloat (a), PdObj::PdInt   (b)) => a.to_bigint().map_or(false, |x| &x == b),
             (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a == b,
+            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => a == &(*b as u32 as f64),
+            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => &BigInt::from(*a as u32) == b,
+            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => &(*a as u32 as f64) == b,
             (PdObj::PdChar  (a), PdObj::PdChar  (b)) => a == b,
             (PdObj::PdString(a), PdObj::PdString(b)) => a == b,
             (PdObj::PdList  (a), PdObj::PdList  (b)) => a == b,
@@ -268,13 +272,20 @@ impl PartialEq for PdObj {
     }
 }
 
+// TODO: Watch https://github.com/rust-lang/rust/issues/72599, we will probably want total
+// orderings in some cases.
+
 impl PartialOrd for PdObj {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
             (PdObj::PdInt   (a), PdObj::PdInt   (b)) => Some(a.cmp(b)),
             (PdObj::PdInt   (a), PdObj::PdFloat (b)) => cmp_bigint_f64(a, b),
+            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => Some(a.cmp(&BigInt::from(*b as u32))),
             (PdObj::PdFloat (a), PdObj::PdInt   (b)) => cmp_bigint_f64(b, a).map(|ord| ord.reverse()),
             (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a.partial_cmp(b),
+            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => a.partial_cmp(&(*b as u32 as f64)), // :thonk:
+            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => Some(BigInt::from(*a as u32).cmp(b)),
+            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => (*a as u32 as f64).partial_cmp(b), // :thonk:
             (PdObj::PdChar  (a), PdObj::PdChar  (b)) => Some(a.cmp(b)),
             (PdObj::PdString(a), PdObj::PdString(b)) => Some(a.cmp(b)),
             (PdObj::PdList  (a), PdObj::PdList  (b)) => a.partial_cmp(b),
