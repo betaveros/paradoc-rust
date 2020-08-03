@@ -232,7 +232,7 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) ->
 pub enum PdObj {
     PdInt(BigInt),
     PdFloat(f64),
-    PdChar(char),
+    PdChar(BigInt),
     PdString(String),
     PdList(Rc<Vec<Rc<PdObj>>>),
     PdBlock(Rc<dyn Block>),
@@ -258,12 +258,12 @@ impl PartialEq for PdObj {
         match (self, other) {
             (PdObj::PdInt   (a), PdObj::PdInt   (b)) => a == b,
             (PdObj::PdInt   (a), PdObj::PdFloat (b)) => b.to_bigint().map_or(false, |x| &x == a),
-            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => a == &BigInt::from(*b as u32),
+            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => a == b,
             (PdObj::PdFloat (a), PdObj::PdInt   (b)) => a.to_bigint().map_or(false, |x| &x == b),
             (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a == b,
-            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => a == &(*b as u32 as f64),
-            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => &BigInt::from(*a as u32) == b,
-            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => &(*a as u32 as f64) == b,
+            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => a.to_bigint().map_or(false, |x| &x == b),
+            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => a == b,
+            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => b.to_bigint().map_or(false, |x| &x == a),
             (PdObj::PdChar  (a), PdObj::PdChar  (b)) => a == b,
             (PdObj::PdString(a), PdObj::PdString(b)) => a == b,
             (PdObj::PdList  (a), PdObj::PdList  (b)) => a == b,
@@ -280,12 +280,12 @@ impl PartialOrd for PdObj {
         match (self, other) {
             (PdObj::PdInt   (a), PdObj::PdInt   (b)) => Some(a.cmp(b)),
             (PdObj::PdInt   (a), PdObj::PdFloat (b)) => cmp_bigint_f64(a, b),
-            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => Some(a.cmp(&BigInt::from(*b as u32))),
+            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => Some(a.cmp(b)),
             (PdObj::PdFloat (a), PdObj::PdInt   (b)) => cmp_bigint_f64(b, a).map(|ord| ord.reverse()),
             (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a.partial_cmp(b),
-            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => a.partial_cmp(&(*b as u32 as f64)), // :thonk:
-            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => Some(BigInt::from(*a as u32).cmp(b)),
-            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => (*a as u32 as f64).partial_cmp(b), // :thonk:
+            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => cmp_bigint_f64(b, a).map(|ord| ord.reverse()),
+            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => Some(a.cmp(b)),
+            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => cmp_bigint_f64(a, b),
             (PdObj::PdChar  (a), PdObj::PdChar  (b)) => Some(a.cmp(b)),
             (PdObj::PdString(a), PdObj::PdString(b)) => Some(a.cmp(b)),
             (PdObj::PdList  (a), PdObj::PdList  (b)) => a.partial_cmp(b),
@@ -294,6 +294,9 @@ impl PartialOrd for PdObj {
     }
 }
 
+impl From<char> for PdObj {
+    fn from(c: char) -> Self { PdObj::PdChar(BigInt::from(c as u32)) }
+}
 impl From<i32> for PdObj {
     fn from(x: i32) -> Self { PdObj::PdInt(BigInt::from(x)) }
 }
@@ -634,7 +637,7 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
                 RcLeader::Lit(Rc::new(PdObj::PdInt(n)))
             }
             lex::Leader::CharLit(c) => {
-                RcLeader::Lit(Rc::new(PdObj::PdChar(c)))
+                RcLeader::Lit(Rc::new(PdObj::from(c)))
             }
             lex::Leader::FloatLit(f) => {
                 RcLeader::Lit(Rc::new(PdObj::PdFloat(f)))
@@ -904,7 +907,7 @@ fn initialize(env: &mut Environment) {
     add_cases("!", cc![not_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
-    env.short_insert("N", PdObj::PdChar('\n'));
+    env.short_insert("N", PdObj::from('\n'));
     env.short_insert("A", PdObj::from(10));
     env.short_insert("¹", PdObj::from(11));
     env.short_insert("∅", PdObj::from(0));
