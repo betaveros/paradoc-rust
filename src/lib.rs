@@ -787,6 +787,8 @@ macro_rules! numfs {
 
 fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::PdList(Rc::new(xs))) }
 
+fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
+
 fn initialize(env: &mut Environment) {
     let (plus_case,  fplus_case ) = numfs![a, b, a + b];
     let (minus_case, fminus_case) = numfs![a, b, a - b];
@@ -811,10 +813,10 @@ fn initialize(env: &mut Environment) {
     let fceil_case  = f_i![a, a.ceil().to_bigint().expect("Ceiling of float was not integer")];
     let ffloor_case = f_i![a, a.floor().to_bigint().expect("Floor of float was not integer")];
 
-    let ilt_case = ii_i![a, b, if a < b { BigInt::from(1) } else { BigInt::from(0) }];
-    let flt_case = ff_i![a, b, if a < b { BigInt::from(1) } else { BigInt::from(0) }];
-    let igt_case = ii_i![a, b, if a > b { BigInt::from(1) } else { BigInt::from(0) }];
-    let fgt_case = ff_i![a, b, if a > b { BigInt::from(1) } else { BigInt::from(0) }];
+    let ilt_case = ii_i![a, b, bi_iverson(a < b)];
+    let flt_case = ff_i![a, b, bi_iverson(a < b)];
+    let igt_case = ii_i![a, b, bi_iverson(a > b)];
+    let fgt_case = ff_i![a, b, bi_iverson(a > b)];
 
     let uncons_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_first().expect("Uncons of empty list");
