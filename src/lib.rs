@@ -893,6 +893,15 @@ fn initialize(env: &mut Environment) {
     add_cases(";p", cc![pop_pair_case]);
     let pop_around_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, b, _c| cc![b] });
     add_cases(";a", cc![pop_around_case]);
+    let pop_under_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, _a, b| cc![b] });
+    add_cases("¸", cc![pop_under_case]);
+
+    let pack_one_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![pd_list(vec![Rc::clone(a)])] });
+    add_cases("†", cc![pack_one_case]);
+    let pack_two_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| cc![pd_list(vec![Rc::clone(a), Rc::clone(b)])] });
+    add_cases("‡", cc![pack_two_case]);
+    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::PdInt(bi_iverson(!pd_truthy(a))))] });
+    add_cases("!", cc![not_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::PdChar('\n'));
@@ -911,9 +920,17 @@ fn initialize(env: &mut Environment) {
         func: |env| { env.mark_stack(); },
     })));
     env.short_insert("]", PdObj::PdBlock(Rc::new(BuiltIn {
-        name: "Make_array".to_string(),
+        name: "Pack".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
+            env.push(Rc::new(PdObj::PdList(Rc::new(list))));
+        },
+    })));
+    env.short_insert("¬", PdObj::PdBlock(Rc::new(BuiltIn {
+        name: "Pack_reverse".to_string(),
+        func: |env| {
+            let mut list = env.pop_until_stack_marker();
+            list.reverse();
             env.push(Rc::new(PdObj::PdList(Rc::new(list))));
         },
     })));
