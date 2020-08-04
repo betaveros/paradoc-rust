@@ -384,11 +384,47 @@ impl PdSeq {
         }
     }
 
+    fn split_first(&self) -> Option<(Rc<PdObj>, Rc<PdObj>)> {
+        match self {
+            PdSeq::List(v) => {
+                let (x, xs) = v.split_first()?;
+                Some((Rc::clone(x), pd_list(xs.to_vec())))
+            }
+            PdSeq::String(s) => {
+                let (x, xs) = s.split_first()?;
+                Some((Rc::new(PdObj::from(*x)), Rc::new(PdObj::String(Rc::new(xs.to_vec())))))
+            }
+            PdSeq::Range(_, _) => {
+                let v = self.to_new_vec();
+                let (x, xs) = v.split_first()?;
+                Some((Rc::clone(x), pd_list(xs.to_vec())))
+            }
+        }
+    }
+
     fn last(&self) -> Option<Rc<PdObj>> {
         match self {
             PdSeq::List(v) => v.last().map(Rc::clone),
             PdSeq::String(s) => s.last().map(|x| Rc::new(PdObj::from(*x))),
             PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(b - 1))) } else { None },
+        }
+    }
+
+    fn split_last(&self) -> Option<(Rc<PdObj>, Rc<PdObj>)> {
+        match self {
+            PdSeq::List(v) => {
+                let (x, xs) = v.split_last()?;
+                Some((Rc::clone(x), pd_list(xs.to_vec())))
+            }
+            PdSeq::String(s) => {
+                let (x, xs) = s.split_last()?;
+                Some((Rc::new(PdObj::from(*x)), Rc::new(PdObj::String(Rc::new(xs.to_vec())))))
+            }
+            PdSeq::Range(_, _) => {
+                let v = self.to_new_vec();
+                let (x, xs) = v.split_last()?;
+                Some((Rc::clone(x), pd_list(xs.to_vec())))
+            }
         }
     }
 }
@@ -870,20 +906,18 @@ fn initialize(env: &mut Environment) {
     let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
     let uncons_case = unary_seq_range_case(|_, a| {
-        let v = a.to_new_vec();
-        let (x, xs) = v.split_first().expect("Uncons of empty list");
-        vec![pd_list(xs.to_vec()), Rc::clone(x)]
+        let (x, xs) = a.split_first().expect("Uncons of empty list");
+        vec![xs, x]
     });
     let first_case = unary_seq_range_case(|_, a| { vec![a.first().expect("First of empty list")] });
-    let rest_case = unary_seq_range_case(|_, a| { vec![pd_list(a.to_new_vec().split_first().expect("Rest of empty list").1.to_vec())] });
+    let rest_case = unary_seq_range_case(|_, a| { vec![a.split_first().expect("Rest of empty list").1] });
 
     let unsnoc_case = unary_seq_range_case(|_, a| {
-        let v = a.to_new_vec();
-        let (x, xs) = v.split_last().expect("Unsnoc of empty list");
-        vec![pd_list(xs.to_vec()), Rc::clone(x)]
+        let (x, xs) = a.split_last().expect("Unsnoc of empty list");
+        vec![xs, x]
     });
     let last_case = unary_seq_range_case(|_, a| { vec![a.last().expect("Last of empty list")] });
-    let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.to_new_vec().split_last().expect("Butlast of empty list").1.to_vec())] });
+    let butlast_case = unary_seq_range_case(|_, a| { vec![a.split_last().expect("Butlast of empty list").1] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
         env.variables.insert(name.to_string(), Rc::new(PdObj::Block(Rc::new(CasedBuiltIn {
