@@ -1,5 +1,8 @@
 #[macro_use] extern crate lazy_static;
 
+use std::iter::Sum;
+use std::ops::Add;
+use std::ops::AddAssign;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::slice::Iter;
@@ -10,6 +13,7 @@ use num_iter;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
 use num_traits::cast::ToPrimitive;
+use num_traits::pow::Pow;
 use std::collections::HashMap;
 
 mod lex;
@@ -789,6 +793,97 @@ macro_rules! numfs {
 }
 
 fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::PdList(Rc::new(xs))) }
+
+fn pd_truthy(x: &PdObj) -> bool {
+    match x {
+        PdObj::PdInt(i) => *i != BigInt::from(0),
+        PdObj::PdFloat(f) => *f != 0.0,
+        PdObj::PdChar(c) => *c != BigInt::from(0),
+        PdObj::PdString(s) => !s.is_empty(),
+        PdObj::PdList(v) => !v.is_empty(),
+        PdObj::PdBlock(_) => true,
+    }
+}
+
+#[derive(Debug)]
+pub enum PdNum {
+    PdNumInt(BigInt),
+    PdNumFloat(f64),
+    PdNumChar(BigInt),
+}
+
+//// ????????
+
+impl Add<&PdNum> for &PdNum {
+    type Output = PdNum;
+
+    fn add(self, other: &PdNum) -> PdNum {
+        match (self, other) {
+            (PdNum::PdNumInt  (a), PdNum::PdNumInt  (b)) => PdNum::PdNumInt(a + b),
+            (PdNum::PdNumInt  (a), PdNum::PdNumFloat(b)) => PdNum::PdNumFloat(a.to_f64().expect("num add float halp") + b),
+            (PdNum::PdNumInt  (a), PdNum::PdNumChar (b)) => PdNum::PdNumInt(a + b),
+            (PdNum::PdNumFloat(a), PdNum::PdNumInt  (b)) => PdNum::PdNumFloat(a + b.to_f64().expect("num add float halp")),
+            (PdNum::PdNumFloat(a), PdNum::PdNumFloat(b)) => PdNum::PdNumFloat(a + b),
+            (PdNum::PdNumFloat(a), PdNum::PdNumChar (b)) => PdNum::PdNumFloat(a + b.to_f64().expect("num add float halp")),
+            (PdNum::PdNumChar (a), PdNum::PdNumInt  (b)) => PdNum::PdNumInt(a + b),
+            (PdNum::PdNumChar (a), PdNum::PdNumFloat(b)) => PdNum::PdNumFloat(a.to_f64().expect("num add float halp") + b),
+            (PdNum::PdNumChar (a), PdNum::PdNumChar (b)) => PdNum::PdNumChar(a + b),
+        }
+    }
+}
+
+impl Add<PdNum> for PdNum {
+    type Output = PdNum;
+
+    fn add(self, other: PdNum) -> PdNum { (&self).add(&other) }
+}
+
+impl AddAssign<&PdNum> for PdNum {
+    fn add_assign(&mut self, other: &PdNum) {
+        let n = mem::replace(self, PdNum::PdNumInt(BigInt::from(0)));
+        *self = &n + other;
+    }
+}
+
+impl Sum for PdNum {
+    fn sum<I: Iterator<Item=Self>>(iter: I) -> Self {
+        iter.fold(PdNum::PdNumInt(BigInt::from(0)), Add::add)
+    }
+}
+
+
+fn pd_deep_length(x: &PdObj) -> usize {
+    match x {
+        PdObj::PdInt(i) => 1,
+        PdObj::PdFloat(f) => 1,
+        PdObj::PdChar(c) => 1,
+        PdObj::PdString(ss) => ss.chars().count(),
+        PdObj::PdList(v) => v.iter().map(|x| pd_deep_length(&*x)).sum(),
+        PdObj::PdBlock(_) => { panic!("wtf not deep"); }
+    }
+}
+
+fn pd_deep_sum(x: &PdObj) -> PdNum {
+    match x {
+        PdObj::PdInt(i) => PdNum::PdNumInt(BigInt::clone(i)),
+        PdObj::PdFloat(f) => PdNum::PdNumFloat(*f),
+        PdObj::PdChar(c) => PdNum::PdNumInt(BigInt::clone(c)),
+        PdObj::PdString(ss) => PdNum::PdNumInt(ss.chars().map(|x| BigInt::from(x as u32)).sum()),
+        PdObj::PdList(v) => v.iter().map(|x| pd_deep_sum(&*x)).sum(),
+        PdObj::PdBlock(_) => { panic!("wtf not deep"); }
+    }
+}
+
+fn pd_deep_square_sum(x: &PdObj) -> PdNum {
+    match x {
+        PdObj::PdInt(i) => PdNum::PdNumInt(i * i),
+        PdObj::PdFloat(f) => PdNum::PdNumFloat(f * f),
+        PdObj::PdChar(c) => PdNum::PdNumInt(c * c),
+        PdObj::PdString(ss) => PdNum::PdNumInt(ss.chars().map(|x| BigInt::from(x as u32).pow(2u32)).sum()),
+        PdObj::PdList(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
+        PdObj::PdBlock(_) => { panic!("wtf not deep"); }
+    }
+}
 
 fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
 
