@@ -159,7 +159,6 @@ impl Environment {
         match &self.shadow {
             Some(inner) => inner.env.get(name),
             None => {
-                println!("len is {}", self.x_stack.len());
                 match name {
                     "X" => self.x_stack.get(self.x_stack.len() - 1),
                     "Y" => self.x_stack.get(self.x_stack.len() - 2),
@@ -170,7 +169,7 @@ impl Environment {
         }
     }
 
-    fn new() -> Environment {
+    pub fn new() -> Environment {
         Environment {
             stack: Vec::new(),
             x_stack: Vec::new(),
@@ -187,6 +186,22 @@ impl Environment {
             PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
             PdObj::Block(b) => b.code_repr(),
         }
+    }
+
+    fn to_repr_string(&self, obj: &Rc<PdObj>) -> String {
+        match &**obj {
+            PdObj::Num(n) => n.to_string(),
+            PdObj::String(s) => format!("\"{}\"", &s.iter().collect::<String>()),
+            PdObj::List(v) => format!("[{}]", v.iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")),
+            PdObj::Block(b) => b.code_repr(),
+        }
+    }
+
+    pub fn stack_to_string(&self) -> String {
+        self.stack.iter().map(|x| self.to_string(x) ).collect::<Vec<String>>().join("")
+    }
+    pub fn stack_to_repr_string(&self) -> String {
+        self.stack.iter().map(|x| self.to_repr_string(x) ).collect::<Vec<String>>().join(" ")
     }
 
     fn run_on_bracketed_shadow<T>(&mut self, shadow_type: ShadowType, body: impl FnOnce(&mut Environment) -> T) -> T {
@@ -686,7 +701,7 @@ pub enum RcLeader {
 }
 
 #[derive(Debug)]
-struct CodeBlock(Vec<RcToken>);
+pub struct CodeBlock(Vec<RcToken>);
 
 #[derive(Debug, PartialEq)]
 pub struct RcToken(pub RcLeader, pub Vec<lex::Trailer>);
@@ -717,6 +732,10 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
         };
         RcToken(rcleader, trailer)
     }).collect()
+}
+
+impl CodeBlock {
+    pub fn parse(code: &str) -> Self { CodeBlock(rcify(lex::parse(code))) }
 }
 
 fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
@@ -883,7 +902,7 @@ fn pd_deep_product(x: &PdObj) -> PdNum {
 
 fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
 
-fn initialize(env: &mut Environment) {
+pub fn initialize(env: &mut Environment) {
     let plus_case = nn_n![a, b, a + b];
     let minus_case = nn_n![a, b, a - b];
     let times_case = nn_n![a, b, a * b];
@@ -1020,6 +1039,10 @@ fn initialize(env: &mut Environment) {
         name: "Nop".to_string(),
         func: |_env| {},
     })));
+    env.short_insert("\n", PdObj::Block(Rc::new(BuiltIn {
+        name: "Nop".to_string(),
+        func: |_env| {},
+    })));
     env.short_insert("[", PdObj::Block(Rc::new(BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); },
@@ -1069,7 +1092,7 @@ pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
     let mut env = Environment::new();
     initialize(&mut env);
 
-    let block = CodeBlock(rcify(lex::parse(code)));
+    let block = CodeBlock::parse(code);
 
     block.run(&mut env);
 
