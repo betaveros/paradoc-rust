@@ -331,13 +331,80 @@ fn just_num(obj: &PdObj) -> Option<PdNum> {
         _ => None,
     }
 }
-fn seq_range(obj: &PdObj) -> Option<Rc<Vec<Rc<PdObj>>>> {
+
+pub enum PdSeq {
+    List(Rc<Vec<Rc<PdObj>>>),
+    String(String),
+    Range(BigInt, BigInt),
+}
+
+pub enum PdIter<'a> {
+    List(Iter<'a, Rc<PdObj>>),
+    String(std::str::Chars<'a>),
+    Range(num_iter::Range<BigInt>),
+}
+
+impl PdSeq {
+    fn iter(&self) -> PdIter<'_> {
+        match self {
+            PdSeq::List(v) => PdIter::List(v.iter()),
+            PdSeq::String(s) => PdIter::String(s.chars()),
+            PdSeq::Range(a, b) => PdIter::Range(num_iter::range(BigInt::clone(a), BigInt::clone(b))),
+        }
+    }
+
+    // TODO: expensive idk scary
+    // it's probably fine but want to make sure it's necessary and I don't accidentally compose it
+    // with additional clones
+    fn to_new_vec(&self) -> Vec<Rc<PdObj>> {
+        match self {
+            PdSeq::List(v) => (&**v).clone(),
+            PdSeq::String(s) => s.chars().map(|x| Rc::new(PdObj::from(x))).collect(),
+            PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| Rc::new(PdObj::from(x))).collect(),
+        }
+    }
+
+    // TODO same
+    fn first(&self) -> Option<Rc<PdObj>> {
+        match self {
+            PdSeq::List(v) => v.first().map(Rc::clone),
+            PdSeq::String(s) => s.chars().next().map(|x| Rc::new(PdObj::from(x))),
+            PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(BigInt::clone(a)))) } else { None },
+        }
+    }
+
+    fn last(&self) -> Option<Rc<PdObj>> {
+        match self {
+            PdSeq::List(v) => v.last().map(Rc::clone),
+            PdSeq::String(s) => s.chars().rev().next().map(|x| Rc::new(PdObj::from(x))),
+            PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(b - 1))) } else { None },
+        }
+    }
+}
+
+impl Iterator for PdIter<'_> {
+    type Item = Rc<PdObj>;
+
+    fn next(&mut self) -> Option<Rc<PdObj>> {
+        match self {
+            PdIter::List(it) => it.next().map(Rc::clone),
+            PdIter::String(cs) => cs.next().map(|x| Rc::new(PdObj::from(x))),
+            PdIter::Range(rs) => rs.next().map(|x| Rc::new(PdObj::from(x))),
+        }
+    }
+}
+
+fn just_seq(obj: &PdObj) -> Option<PdSeq> {
     match obj {
-        // TODO: wasteful to construct the vector :(
-        PdObj::Num(PdNum::Int(a)) => Some(Rc::new(num_iter::range(BigInt::from(0), a.clone()).map(|x| Rc::new(PdObj::from(x))).collect())),
-        // PdObj::Int(a) => Some((BigInt::from(0)..a.clone()).collect()),
-        PdObj::List(a) => Some(Rc::clone(a)),
+        PdObj::List(a) => Some(PdSeq::List(Rc::clone(a))),
+        PdObj::String(a) => Some(PdSeq::String(String::clone(a))),
         _ => None,
+    }
+}
+fn seq_range(obj: &PdObj) -> Option<PdSeq> {
+    match obj {
+        PdObj::Num(PdNum::Int(a)) => Some(PdSeq::Range(BigInt::from(0), BigInt::clone(a))),
+        _ => just_seq(obj),
     }
 }
 fn just_block(obj: &PdObj) -> Option<Rc<dyn Block>> {
@@ -401,7 +468,7 @@ impl<T1, T2> Case for BinaryCase<T1, T2> {
 fn binary_num_case(func: fn(&mut Environment, &PdNum, &PdNum) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
     Rc::new(BinaryCase { coerce1: just_num, coerce2: just_num, func })
 }
-fn unary_seq_range_case(func: fn(&mut Environment, &Rc<Vec<Rc<PdObj>>>) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
+fn unary_seq_range_case(func: fn(&mut Environment, &PdSeq) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: seq_range, func })
 }
 struct CasedBuiltIn {
@@ -471,7 +538,7 @@ impl Block for EachBlock {
         // Extract into sandbox; push x-stack; handle continue/breaks
         match seq_range(&*env.pop_or_panic("each no stack")) {
             Some(vec) => {
-                for obj in &**vec {
+                for obj in vec.iter() {
                     env.push(Rc::clone(&obj));
                     self.body.run(env);
                 }
@@ -485,11 +552,11 @@ impl Block for EachBlock {
 }
 
 // TODO: handle continue/break (have fun!)
-fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: Iter<Rc<PdObj>>) -> Vec<Rc<PdObj>> {
+fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> Vec<Rc<PdObj>> {
     env.push_yx();
     let res = it.enumerate().flat_map(|(i, obj)| {
-        env.set_yx(Rc::new(PdObj::from(i)), Rc::clone(obj));
-        sandbox(env, &func, vec![Rc::clone(obj)])
+        env.set_yx(Rc::new(PdObj::from(i)), Rc::clone(&obj));
+        sandbox(env, &func, vec![obj])
     }).collect();
     env.pop_yx();
     res
@@ -792,18 +859,20 @@ fn initialize(env: &mut Environment) {
     let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
     let uncons_case = unary_seq_range_case(|_, a| {
-        let (x, xs) = a.split_first().expect("Uncons of empty list");
+        let v = a.to_new_vec();
+        let (x, xs) = v.split_first().expect("Uncons of empty list");
         vec![pd_list(xs.to_vec()), Rc::clone(x)]
     });
-    let first_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.first().expect("First of empty list"))] });
-    let rest_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_first().expect("Rest of empty list").1.to_vec())] });
+    let first_case = unary_seq_range_case(|_, a| { vec![a.first().expect("First of empty list")] });
+    let rest_case = unary_seq_range_case(|_, a| { vec![pd_list(a.to_new_vec().split_first().expect("Rest of empty list").1.to_vec())] });
 
     let unsnoc_case = unary_seq_range_case(|_, a| {
-        let (x, xs) = a.split_last().expect("Unsnoc of empty list");
+        let v = a.to_new_vec();
+        let (x, xs) = v.split_last().expect("Unsnoc of empty list");
         vec![pd_list(xs.to_vec()), Rc::clone(x)]
     });
-    let last_case = unary_seq_range_case(|_, a| { vec![Rc::clone(a.last().expect("Last of empty list"))] });
-    let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_last().expect("Butlast of empty list").1.to_vec())] });
+    let last_case = unary_seq_range_case(|_, a| { vec![a.last().expect("Last of empty list")] });
+    let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.to_new_vec().split_last().expect("Butlast of empty list").1.to_vec())] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
         env.variables.insert(name.to_string(), Rc::new(PdObj::Block(Rc::new(CasedBuiltIn {
