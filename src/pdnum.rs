@@ -32,6 +32,14 @@ impl From<usize> for PdNum {
     fn from(x: usize) -> Self { PdNum::Int(BigInt::from(x)) }
 }
 
+fn pow_big_ints(a: &BigInt, b: &BigInt) -> PdNum {
+    match b.sign() {
+        num::bigint::Sign::NoSign => PdNum::from(0),
+        num::bigint::Sign::Plus => PdNum::from(Pow::pow(a, b.magnitude())),
+        num::bigint::Sign::Minus => PdNum::from(a.to_f64().expect("exponent c'mon").pow(b.to_f64().expect("exponent c'mon"))),
+    }
+}
+
 impl PdNum {
     pub fn to_string(&self) -> String {
         match self {
@@ -92,6 +100,20 @@ impl PdNum {
             PdNum::Int(i) => PdNum::Int(i.pow(e)),
             PdNum::Float(f) => PdNum::Float(f.powi(e as i32)),
             PdNum::Char(c) => PdNum::Char(c.pow(e)),
+        }
+    }
+
+    pub fn pow_num(&self, other: &PdNum) -> PdNum {
+        match (self, other) {
+            (PdNum::Int   (a), PdNum::Int   (b)) => pow_big_ints(a, b),
+            (PdNum::Int   (a), PdNum::Float (b)) => PdNum::from(a.to_f64().expect("pow pls").pow(b)),
+            (PdNum::Int   (a), PdNum::Char  (b)) => pow_big_ints(a, b),
+            (PdNum::Float (a), PdNum::Int   (b)) => PdNum::from(a.pow(b.to_f64().expect("pow pls"))),
+            (PdNum::Float (a), PdNum::Float (b)) => PdNum::from(a.pow(b)),
+            (PdNum::Float (a), PdNum::Char  (b)) => PdNum::from(a.pow(b.to_f64().expect("pow pls"))),
+            (PdNum::Char  (a), PdNum::Int   (b)) => pow_big_ints(a, b),
+            (PdNum::Char  (a), PdNum::Float (b)) => PdNum::from(a.to_f64().expect("pow pls").pow(b)),
+            (PdNum::Char  (a), PdNum::Char  (b)) => pow_big_ints(a, b),
         }
     }
 

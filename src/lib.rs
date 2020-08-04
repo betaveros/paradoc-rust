@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use std::mem;
 use num_iter;
 use num::bigint::BigInt;
+use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
 use std::collections::HashMap;
 
@@ -285,6 +286,11 @@ forward_from!(i32);
 forward_from!(f64);
 forward_from!(usize);
 
+impl From<Vec<char>> for PdObj {
+    fn from(s: Vec<char>) -> Self {
+        PdObj::String(Rc::new(s))
+    }
+}
 impl From<String> for PdObj {
     fn from(s: String) -> Self {
         PdObj::String(Rc::new(s.chars().collect()))
@@ -590,6 +596,25 @@ impl Block for CasedBuiltIn {
     }
 }
 
+struct DeepBinaryOpBlock {
+    func: fn(&PdNum, &PdNum) -> PdNum,
+    other: PdNum,
+}
+impl Debug for DeepBinaryOpBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "DeepBinaryOpBlock {{ func: ???, other: {:?} }}", self.other)
+    }
+}
+impl Block for DeepBinaryOpBlock {
+    fn run(&self, env: &mut Environment) {
+        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &*env.pop_or_panic("deep binary op no stack"));
+        env.push(Rc::new(res));
+    }
+    fn code_repr(&self) -> String {
+        self.other.to_string() + "_???_binary_op"
+    }
+}
+
 #[derive(Debug)]
 struct EachBlock {
     body: Rc<dyn Block>,
@@ -740,6 +765,13 @@ impl CodeBlock {
 
 fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
     match &**obj {
+        PdObj::Num(n) => match trailer.0.as_ref() {
+            "p" | "_p" | "_power" => {
+                let exponent: PdNum = PdNum::clone(n);
+                Some((Rc::new(PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
+            }
+            _ => None
+        }
         PdObj::Block(bb) => match trailer.0.as_ref() {
             "e" | "_e" | "_each" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
@@ -900,6 +932,33 @@ fn pd_deep_product(x: &PdObj) -> PdNum {
     }
 }
 
+fn pd_build_if_string(x: Vec<PdNum>) -> PdObj {
+    let mut chars: Vec<char> = Vec::new();
+    let mut char_ok = true;
+    for n in &x {
+        match n {
+            PdNum::Char(c) => { chars.push(c.to_u32().and_then(std::char::from_u32).expect("char, c'mon")); }
+            _ => { char_ok = false; break }
+        }
+    }
+    if char_ok {
+        PdObj::from(chars)
+    } else {
+        PdObj::List(Rc::new(x.iter().map(|e| Rc::new(PdObj::Num(PdNum::clone(e)))).collect()))
+    }
+}
+
+fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
+    where F: Fn(&PdNum) -> PdNum {
+
+    match x {
+        PdObj::Num(n) => PdObj::Num(f(n)),
+        PdObj::String(s) => pd_build_if_string(s.iter().map(|c| f(&PdNum::from(*c))).collect()),
+        PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| Rc::new(pd_deep_map(f, &*e))).collect())),
+        _ => { panic!("wtf not deep"); }
+    }
+}
+
 fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
 
 pub fn initialize(env: &mut Environment) {
@@ -955,6 +1014,8 @@ pub fn initialize(env: &mut Environment) {
 
     let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| vec![Rc::new(PdObj::Num(a * a))] });
 
+    let space_join_case = unary_seq_range_case(|env, a| { vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))] });
+
     macro_rules! cc {
         ($($case:expr),*) => {
             vec![$( Rc::clone(&$case), )*];
@@ -980,6 +1041,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("«", cc![dec2_case, butlast_case]);
     add_cases("»", cc![inc2_case, rest_case]);
     add_cases("²", cc![square_case]);
+    add_cases(" r", cc![space_join_case]);
 
     let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![a, a] });
     add_cases(":", cc![dup_case]);
