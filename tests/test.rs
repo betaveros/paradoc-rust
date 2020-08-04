@@ -3,11 +3,11 @@ use num::bigint::BigInt;
 extern crate paradoc;
 
 fn int(x: i32) -> Rc<paradoc::PdObj> {
-    Rc::new(paradoc::PdObj::PdInt(BigInt::from(x)))
+    Rc::new(paradoc::PdObj::from(x))
 }
 
 fn list(xs: Vec<Rc<paradoc::PdObj>>) -> Rc<paradoc::PdObj> {
-    Rc::new(paradoc::PdObj::PdList(Rc::new(xs)))
+    Rc::new(paradoc::PdObj::List(Rc::new(xs)))
 }
 
 

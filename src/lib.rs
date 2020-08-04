@@ -1,8 +1,5 @@
 #[macro_use] extern crate lazy_static;
 
-use std::iter::Sum;
-use std::ops::Add;
-use std::ops::AddAssign;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::slice::Iter;
@@ -12,11 +9,12 @@ use num::Integer;
 use num_iter;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
-use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
 use std::collections::HashMap;
 
 mod lex;
+mod pdnum;
+use crate::pdnum::PdNum;
 
 #[derive(Debug)]
 pub struct Environment {
@@ -142,8 +140,8 @@ impl Environment {
     }
 
     fn push_yx(&mut self) {
-        self.push_x(Rc::new(PdObj::PdString("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
-        self.push_x(Rc::new(PdObj::PdString("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+        self.push_x(Rc::new(PdObj::String("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+        self.push_x(Rc::new(PdObj::String("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
     }
     fn set_yx(&mut self, y: Rc<PdObj>, x: Rc<PdObj>) {
         let len = self.x_stack.len();
@@ -186,12 +184,10 @@ impl Environment {
 
     fn to_string(&self, obj: &Rc<PdObj>) -> String {
         match &**obj {
-            PdObj::PdInt(a) => a.to_string(),
-            PdObj::PdFloat(x) => x.to_string(),
-            PdObj::PdChar(c) => c.to_string(),
-            PdObj::PdString(s) => s.clone(),
-            PdObj::PdList(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
-            PdObj::PdBlock(b) => b.code_repr(),
+            PdObj::Num(n) => n.to_string(),
+            PdObj::String(s) => s.clone(),
+            PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
+            PdObj::Block(b) => b.code_repr(),
         }
     }
 
@@ -234,12 +230,10 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) ->
 }
 #[derive(Debug)]
 pub enum PdObj {
-    PdInt(BigInt),
-    PdFloat(f64),
-    PdChar(BigInt),
-    PdString(String),
-    PdList(Rc<Vec<Rc<PdObj>>>),
-    PdBlock(Rc<dyn Block>),
+    Num(PdNum),
+    String(String),
+    List(Rc<Vec<Rc<PdObj>>>),
+    Block(Rc<dyn Block>),
 }
 
 // this seems... nontrivial??
@@ -260,17 +254,9 @@ fn cmp_bigint_f64(a: &BigInt, b: &f64) -> Option<Ordering> {
 impl PartialEq for PdObj {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (PdObj::PdInt   (a), PdObj::PdInt   (b)) => a == b,
-            (PdObj::PdInt   (a), PdObj::PdFloat (b)) => b.to_bigint().map_or(false, |x| &x == a),
-            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => a == b,
-            (PdObj::PdFloat (a), PdObj::PdInt   (b)) => a.to_bigint().map_or(false, |x| &x == b),
-            (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a == b,
-            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => a.to_bigint().map_or(false, |x| &x == b),
-            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => a == b,
-            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => b.to_bigint().map_or(false, |x| &x == a),
-            (PdObj::PdChar  (a), PdObj::PdChar  (b)) => a == b,
-            (PdObj::PdString(a), PdObj::PdString(b)) => a == b,
-            (PdObj::PdList  (a), PdObj::PdList  (b)) => a == b,
+            (PdObj::Num   (a), PdObj::Num   (b)) => a == b,
+            (PdObj::String(a), PdObj::String(b)) => a == b,
+            (PdObj::List  (a), PdObj::List  (b)) => a == b,
             _ => false,
         }
     }
@@ -282,30 +268,28 @@ impl PartialEq for PdObj {
 impl PartialOrd for PdObj {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
-            (PdObj::PdInt   (a), PdObj::PdInt   (b)) => Some(a.cmp(b)),
-            (PdObj::PdInt   (a), PdObj::PdFloat (b)) => cmp_bigint_f64(a, b),
-            (PdObj::PdInt   (a), PdObj::PdChar  (b)) => Some(a.cmp(b)),
-            (PdObj::PdFloat (a), PdObj::PdInt   (b)) => cmp_bigint_f64(b, a).map(|ord| ord.reverse()),
-            (PdObj::PdFloat (a), PdObj::PdFloat (b)) => a.partial_cmp(b),
-            (PdObj::PdFloat (a), PdObj::PdChar  (b)) => cmp_bigint_f64(b, a).map(|ord| ord.reverse()),
-            (PdObj::PdChar  (a), PdObj::PdInt   (b)) => Some(a.cmp(b)),
-            (PdObj::PdChar  (a), PdObj::PdFloat (b)) => cmp_bigint_f64(a, b),
-            (PdObj::PdChar  (a), PdObj::PdChar  (b)) => Some(a.cmp(b)),
-            (PdObj::PdString(a), PdObj::PdString(b)) => Some(a.cmp(b)),
-            (PdObj::PdList  (a), PdObj::PdList  (b)) => a.partial_cmp(b),
+            (PdObj::Num   (a), PdObj::Num   (b)) => a.partial_cmp(b),
+            (PdObj::String(a), PdObj::String(b)) => Some(a.cmp(b)),
+            (PdObj::List  (a), PdObj::List  (b)) => a.partial_cmp(b),
             _ => None,
         }
     }
 }
 
+impl From<BigInt> for PdObj {
+    fn from(n: BigInt) -> Self { PdObj::Num(PdNum::Int(n)) }
+}
 impl From<char> for PdObj {
-    fn from(c: char) -> Self { PdObj::PdChar(BigInt::from(c as u32)) }
+    fn from(c: char) -> Self { PdObj::Num(PdNum::Char(BigInt::from(c as u32))) }
 }
 impl From<i32> for PdObj {
-    fn from(x: i32) -> Self { PdObj::PdInt(BigInt::from(x)) }
+    fn from(x: i32) -> Self { PdObj::from(BigInt::from(x)) }
+}
+impl From<f64> for PdObj {
+    fn from(x: f64) -> Self { PdObj::Num(PdNum::Float(x)) }
 }
 impl From<usize> for PdObj {
-    fn from(x: usize) -> Self { PdObj::PdInt(BigInt::from(x)) }
+    fn from(x: usize) -> Self { PdObj::from(BigInt::from(x)) }
 }
 
 struct BuiltIn {
@@ -363,44 +347,36 @@ impl Case for TernaryAnyCase {
     }
 }
 
-fn just_int(obj: &PdObj) -> Option<BigInt> {
+fn just_num(obj: &PdObj) -> Option<PdNum> {
     match obj {
-        PdObj::PdInt(a) => Some(a.clone()),
-        _ => None,
-    }
-}
-fn floatify(obj: &PdObj) -> Option<f64> {
-    match obj {
-        PdObj::PdInt(a) => Some(a.to_f64().expect("BigInt too large to floatify?")), // FIXME
-        // (we do not want to propagate the option since cases would confusingly fail to apply)
-        PdObj::PdFloat(a) => Some(*a),
+        PdObj::Num(n) => Some(n.clone()),
         _ => None,
     }
 }
 fn seq_range(obj: &PdObj) -> Option<Rc<Vec<Rc<PdObj>>>> {
     match obj {
         // TODO: wasteful to construct the vector :(
-        PdObj::PdInt(a) => Some(Rc::new(num_iter::range(BigInt::from(0), a.clone()).map(|x| Rc::new(PdObj::PdInt(x))).collect())),
-        // PdObj::PdInt(a) => Some((BigInt::from(0)..a.clone()).collect()),
-        PdObj::PdList(a) => Some(Rc::clone(a)),
+        PdObj::Num(PdNum::Int(a)) => Some(Rc::new(num_iter::range(BigInt::from(0), a.clone()).map(|x| Rc::new(PdObj::from(x))).collect())),
+        // PdObj::Int(a) => Some((BigInt::from(0)..a.clone()).collect()),
+        PdObj::List(a) => Some(Rc::clone(a)),
         _ => None,
     }
 }
 fn just_block(obj: &PdObj) -> Option<Rc<dyn Block>> {
     match obj {
-        PdObj::PdBlock(a) => Some(Rc::clone(a)),
+        PdObj::Block(a) => Some(Rc::clone(a)),
         _ => None,
     }
 }
 
-struct UnaryIntCase {
-    func: fn(&mut Environment, &BigInt) -> Vec<Rc<PdObj>>,
+struct UnaryNumCase {
+    func: fn(&mut Environment, &PdNum) -> Vec<Rc<PdObj>>,
 }
-impl Case for UnaryIntCase {
+impl Case for UnaryNumCase {
     fn arity(&self) -> usize { 1 }
     fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> Option<Vec<Rc<PdObj>>> {
         match &*args[0] {
-            PdObj::PdInt(ai) => {
+            PdObj::Num(ai) => {
                 let ai2 = ai.clone();
                 Some((self.func)(env, &ai2))
             }
@@ -424,6 +400,9 @@ impl<T> Case for UnaryCase<T> {
         }
     }
 }
+fn unary_num_case(func: fn(&mut Environment, &PdNum) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
+    Rc::new(UnaryCase { coerce: just_num, func })
+}
 
 struct BinaryCase<T1, T2> {
     coerce1: fn(&PdObj) -> Option<T1>,
@@ -441,17 +420,8 @@ impl<T1, T2> Case for BinaryCase<T1, T2> {
         }
     }
 }
-fn unary_int_case(func: fn(&mut Environment, &BigInt) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
-    Rc::new(UnaryCase { coerce: just_int, func })
-}
-fn unary_floatify_case(func: fn(&mut Environment, &f64) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
-    Rc::new(UnaryCase { coerce: floatify, func })
-}
-fn binary_int_case(func: fn(&mut Environment, &BigInt, &BigInt) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
-    Rc::new(BinaryCase { coerce1: just_int, coerce2: just_int, func })
-}
-fn binary_floatify_case(func: fn(&mut Environment, &f64, &f64) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
-    Rc::new(BinaryCase { coerce1: floatify, coerce2: floatify, func })
+fn binary_num_case(func: fn(&mut Environment, &PdNum, &PdNum) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
+    Rc::new(BinaryCase { coerce1: just_num, coerce2: just_num, func })
 }
 fn unary_seq_range_case(func: fn(&mut Environment, &Rc<Vec<Rc<PdObj>>>) -> Vec<Rc<PdObj>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: seq_range, func })
@@ -556,7 +526,7 @@ impl Block for MapBlock {
         match seq_range(&*env.pop_or_panic("map no stack")) {
             Some(vec) => {
                 let res = pd_map(env, &self.body, vec.iter());
-                env.push(Rc::new(PdObj::PdList(Rc::new(res))));
+                env.push(Rc::new(PdObj::List(Rc::new(res))));
             }
             _ => { panic!("map coercion failed") }
         }
@@ -635,19 +605,19 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
     tokens.into_iter().map(|lex::Token(leader, trailer)| {
         let rcleader = match leader {
             lex::Leader::StringLit(s) => {
-                RcLeader::Lit(Rc::new(PdObj::PdString(s)))
+                RcLeader::Lit(Rc::new(PdObj::String(s)))
             }
             lex::Leader::IntLit(n) => {
-                RcLeader::Lit(Rc::new(PdObj::PdInt(n)))
+                RcLeader::Lit(Rc::new(PdObj::from(n)))
             }
             lex::Leader::CharLit(c) => {
                 RcLeader::Lit(Rc::new(PdObj::from(c)))
             }
             lex::Leader::FloatLit(f) => {
-                RcLeader::Lit(Rc::new(PdObj::PdFloat(f)))
+                RcLeader::Lit(Rc::new(PdObj::from(f)))
             }
             lex::Leader::Block(b) => {
-                RcLeader::Lit(Rc::new(PdObj::PdBlock(Rc::new(CodeBlock(rcify(*b))))))
+                RcLeader::Lit(Rc::new(PdObj::Block(Rc::new(CodeBlock(rcify(*b))))))
             }
             lex::Leader::Var(s) => {
                 RcLeader::Var(Rc::new(s))
@@ -659,26 +629,26 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
 
 fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
     match &**obj {
-        PdObj::PdBlock(bb) => match trailer.0.as_ref() {
+        PdObj::Block(bb) => match trailer.0.as_ref() {
             "e" | "_e" | "_each" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::PdBlock(Rc::new(EachBlock { body }))), false))
+                Some((Rc::new(PdObj::Block(Rc::new(EachBlock { body }))), false))
             }
             "m" | "_m" | "_map" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::PdBlock(Rc::new(MapBlock { body }))), false))
+                Some((Rc::new(PdObj::Block(Rc::new(MapBlock { body }))), false))
             }
             "u" | "_u" | "_under" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::PdBlock(Rc::new(UnderBlock { body }))), false))
+                Some((Rc::new(PdObj::Block(Rc::new(UnderBlock { body }))), false))
             }
             "k" | "_k" | "_keep" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::PdBlock(Rc::new(KeepBlock { body }))), false))
+                Some((Rc::new(PdObj::Block(Rc::new(KeepBlock { body }))), false))
             }
             "q" | "_q" | "_keepunder" => {
                 let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::PdBlock(Rc::new(KeepUnderBlock { body }))), false))
+                Some((Rc::new(PdObj::Block(Rc::new(KeepUnderBlock { body }))), false))
             }
             _ => None
         }
@@ -745,176 +715,85 @@ impl Block for CodeBlock {
 
 fn apply_on(env: &mut Environment, obj: Rc<PdObj>) {
     match &*obj {
-        PdObj::PdInt(_)    => { env.push(obj); }
-        PdObj::PdString(_) => { env.push(obj); }
-        PdObj::PdChar(_)   => { env.push(obj); }
-        PdObj::PdList(_)   => { env.push(obj); }
-        PdObj::PdFloat(_)  => { env.push(obj); }
-        PdObj::PdBlock(bb) => {
+        PdObj::Num(_)    => { env.push(obj); }
+        PdObj::String(_) => { env.push(obj); }
+        PdObj::List(_)   => { env.push(obj); }
+        PdObj::Block(bb) => {
             bb.run(env);
         }
     }
 }
 
-macro_rules! i_i {
+macro_rules! n_n {
     ($a:ident, $x:expr) => {
-        unary_int_case(|_, $a| vec![Rc::new(PdObj::PdInt($x))])
+        unary_num_case(|_, $a| vec![Rc::new(PdObj::Num($x))])
     };
 }
-macro_rules! f_f {
-    ($a:ident, $x:expr) => {
-        unary_floatify_case(|_, $a| vec![Rc::new(PdObj::PdFloat($x))])
-    };
-}
-macro_rules! f_i {
-    ($a:ident, $x:expr) => {
-        unary_floatify_case(|_, $a| vec![Rc::new(PdObj::PdInt($x))])
-    };
-}
-macro_rules! ii_i {
+macro_rules! nn_n {
     ($a:ident, $b:ident, $x:expr) => {
-        binary_int_case(|_, $a, $b| vec![Rc::new(PdObj::PdInt($x))])
+        binary_num_case(|_, $a, $b| vec![Rc::new(PdObj::Num($x))])
     };
-}
-macro_rules! ff_i {
-    ($a:ident, $b:ident, $x:expr) => {
-        binary_floatify_case(|_, $a, $b| vec![Rc::new(PdObj::PdInt($x))])
-    };
-}
-macro_rules! ff_f {
-    ($a:ident, $b:ident, $x:expr) => {
-        binary_floatify_case(|_, $a, $b| vec![Rc::new(PdObj::PdFloat($x))])
-    };
-}
-macro_rules! numfs {
-    ($a:ident, $b:ident, $x:expr) => {
-        (ii_i![$a, $b, $x], ff_f![$a, $b, $x])
-    }
 }
 
-fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::PdList(Rc::new(xs))) }
+fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::List(Rc::new(xs))) }
 
 fn pd_truthy(x: &PdObj) -> bool {
     match x {
-        PdObj::PdInt(i) => *i != BigInt::from(0),
-        PdObj::PdFloat(f) => *f != 0.0,
-        PdObj::PdChar(c) => *c != BigInt::from(0),
-        PdObj::PdString(s) => !s.is_empty(),
-        PdObj::PdList(v) => !v.is_empty(),
-        PdObj::PdBlock(_) => true,
+        PdObj::Num(n) => n.is_nonzero(),
+        PdObj::String(s) => !s.is_empty(),
+        PdObj::List(v) => !v.is_empty(),
+        PdObj::Block(_) => true,
     }
 }
-
-#[derive(Debug)]
-pub enum PdNum {
-    PdNumInt(BigInt),
-    PdNumFloat(f64),
-    PdNumChar(BigInt),
-}
-
-//// ????????
-
-impl Add<&PdNum> for &PdNum {
-    type Output = PdNum;
-
-    fn add(self, other: &PdNum) -> PdNum {
-        match (self, other) {
-            (PdNum::PdNumInt  (a), PdNum::PdNumInt  (b)) => PdNum::PdNumInt(a + b),
-            (PdNum::PdNumInt  (a), PdNum::PdNumFloat(b)) => PdNum::PdNumFloat(a.to_f64().expect("num add float halp") + b),
-            (PdNum::PdNumInt  (a), PdNum::PdNumChar (b)) => PdNum::PdNumInt(a + b),
-            (PdNum::PdNumFloat(a), PdNum::PdNumInt  (b)) => PdNum::PdNumFloat(a + b.to_f64().expect("num add float halp")),
-            (PdNum::PdNumFloat(a), PdNum::PdNumFloat(b)) => PdNum::PdNumFloat(a + b),
-            (PdNum::PdNumFloat(a), PdNum::PdNumChar (b)) => PdNum::PdNumFloat(a + b.to_f64().expect("num add float halp")),
-            (PdNum::PdNumChar (a), PdNum::PdNumInt  (b)) => PdNum::PdNumInt(a + b),
-            (PdNum::PdNumChar (a), PdNum::PdNumFloat(b)) => PdNum::PdNumFloat(a.to_f64().expect("num add float halp") + b),
-            (PdNum::PdNumChar (a), PdNum::PdNumChar (b)) => PdNum::PdNumChar(a + b),
-        }
-    }
-}
-
-impl Add<PdNum> for PdNum {
-    type Output = PdNum;
-
-    fn add(self, other: PdNum) -> PdNum { (&self).add(&other) }
-}
-
-impl AddAssign<&PdNum> for PdNum {
-    fn add_assign(&mut self, other: &PdNum) {
-        let n = mem::replace(self, PdNum::PdNumInt(BigInt::from(0)));
-        *self = &n + other;
-    }
-}
-
-impl Sum for PdNum {
-    fn sum<I: Iterator<Item=Self>>(iter: I) -> Self {
-        iter.fold(PdNum::PdNumInt(BigInt::from(0)), Add::add)
-    }
-}
-
 
 fn pd_deep_length(x: &PdObj) -> usize {
     match x {
-        PdObj::PdInt(i) => 1,
-        PdObj::PdFloat(f) => 1,
-        PdObj::PdChar(c) => 1,
-        PdObj::PdString(ss) => ss.chars().count(),
-        PdObj::PdList(v) => v.iter().map(|x| pd_deep_length(&*x)).sum(),
-        PdObj::PdBlock(_) => { panic!("wtf not deep"); }
+        PdObj::Num(n) => 1,
+        PdObj::String(ss) => ss.chars().count(),
+        PdObj::List(v) => v.iter().map(|x| pd_deep_length(&*x)).sum(),
+        PdObj::Block(_) => { panic!("wtf not deep"); }
     }
 }
 
 fn pd_deep_sum(x: &PdObj) -> PdNum {
     match x {
-        PdObj::PdInt(i) => PdNum::PdNumInt(BigInt::clone(i)),
-        PdObj::PdFloat(f) => PdNum::PdNumFloat(*f),
-        PdObj::PdChar(c) => PdNum::PdNumInt(BigInt::clone(c)),
-        PdObj::PdString(ss) => PdNum::PdNumInt(ss.chars().map(|x| BigInt::from(x as u32)).sum()),
-        PdObj::PdList(v) => v.iter().map(|x| pd_deep_sum(&*x)).sum(),
-        PdObj::PdBlock(_) => { panic!("wtf not deep"); }
+        PdObj::Num(n) => n.clone(),
+        PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32)).sum()),
+        PdObj::List(v) => v.iter().map(|x| pd_deep_sum(&*x)).sum(),
+        PdObj::Block(_) => { panic!("wtf not deep"); }
     }
 }
 
 fn pd_deep_square_sum(x: &PdObj) -> PdNum {
     match x {
-        PdObj::PdInt(i) => PdNum::PdNumInt(i * i),
-        PdObj::PdFloat(f) => PdNum::PdNumFloat(f * f),
-        PdObj::PdChar(c) => PdNum::PdNumInt(c * c),
-        PdObj::PdString(ss) => PdNum::PdNumInt(ss.chars().map(|x| BigInt::from(x as u32).pow(2u32)).sum()),
-        PdObj::PdList(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
-        PdObj::PdBlock(_) => { panic!("wtf not deep"); }
+        PdObj::Num(n) => n * n,
+        PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32).pow(2u32)).sum()),
+        PdObj::List(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
+        PdObj::Block(_) => { panic!("wtf not deep"); }
     }
 }
 
 fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
 
 fn initialize(env: &mut Environment) {
-    let (plus_case,  fplus_case ) = numfs![a, b, a + b];
-    let (minus_case, fminus_case) = numfs![a, b, a - b];
-    let (times_case, ftimes_case) = numfs![a, b, a * b];
+    let plus_case = nn_n![a, b, a + b];
+    let minus_case = nn_n![a, b, a - b];
+    let times_case = nn_n![a, b, a * b];
     // TODO: signs...
-    let div_case = ff_f![a, b, a / b];
-    let mod_case = ii_i![a, b, Integer::mod_floor(a, b)];
-    let fmod_case = ff_f![a, b, a.rem_euclid(*b)];
-    let intdiv_case = ii_i![a, b, Integer::div_floor(a, b)];
-    let fintdiv_case = ff_f![a, b, a.div_euclid(*b)];
+    let div_case = nn_n![a, b, a / b];
+    let mod_case = nn_n![a, b, a % b];
+    let intdiv_case = nn_n![a, b, a.div_floor(b)];
 
-    let id_int_case = i_i![a, a.clone()];
-    let inc_case   = i_i![a, a + 1];
-    let dec_case   = i_i![a, a - 1];
-    let inc2_case  = i_i![a, a + 2];
-    let dec2_case  = i_i![a, a - 2];
-    let finc_case  = f_f![a, a + 1.0];
-    let fdec_case  = f_f![a, a - 1.0];
-    let finc2_case = f_f![a, a + 2.0];
-    let fdec2_case = f_f![a, a - 2.0];
+    let inc_case   = n_n![a, a.add_const( 1)];
+    let dec_case   = n_n![a, a.add_const(-1)];
+    let inc2_case  = n_n![a, a.add_const( 2)];
+    let dec2_case  = n_n![a, a.add_const(-2)];
 
-    let fceil_case  = f_i![a, a.ceil().to_bigint().expect("Ceiling of float was not integer")];
-    let ffloor_case = f_i![a, a.floor().to_bigint().expect("Floor of float was not integer")];
+    let ceil_case  = n_n![a, a.ceil()];
+    let floor_case = n_n![a, a.floor()];
 
-    let ilt_case = ii_i![a, b, bi_iverson(a < b)];
-    let flt_case = ff_i![a, b, bi_iverson(a < b)];
-    let igt_case = ii_i![a, b, bi_iverson(a > b)];
-    let fgt_case = ff_i![a, b, bi_iverson(a > b)];
+    let lt_case = nn_n![a, b, PdNum::Int(bi_iverson(a < b))];
+    let gt_case = nn_n![a, b, PdNum::Int(bi_iverson(a > b))];
 
     let uncons_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_first().expect("Uncons of empty list");
@@ -931,7 +810,7 @@ fn initialize(env: &mut Environment) {
     let butlast_case = unary_seq_range_case(|_, a| { vec![pd_list(a.split_last().expect("Butlast of empty list").1.to_vec())] });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
-        env.variables.insert(name.to_string(), Rc::new(PdObj::PdBlock(Rc::new(CasedBuiltIn {
+        env.variables.insert(name.to_string(), Rc::new(PdObj::Block(Rc::new(CasedBuiltIn {
             name: name.to_string(),
             cases,
         }))));
@@ -945,7 +824,7 @@ fn initialize(env: &mut Environment) {
         }
     });
 
-    let square_case   : Rc<dyn Case> = Rc::new(UnaryIntCase { func: |_, a| vec![Rc::new(PdObj::PdInt(a * a))] });
+    let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| vec![Rc::new(PdObj::Num(a * a))] });
 
     macro_rules! cc {
         ($($case:expr),*) => {
@@ -953,21 +832,20 @@ fn initialize(env: &mut Environment) {
         }
     }
 
-    add_cases("+", cc![plus_case, fplus_case]);
-    add_cases("-", cc![minus_case, fminus_case]);
-    add_cases("*", cc![times_case, ftimes_case]);
+    add_cases("+", cc![plus_case]);
+    add_cases("-", cc![minus_case]);
+    add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case]);
-    add_cases("%", cc![mod_case, fmod_case, map_case]);
-    add_cases("÷", cc![intdiv_case, fintdiv_case]);
-    add_cases("(", cc![dec_case, fdec_case, uncons_case]);
-    add_cases(")", cc![inc_case, finc_case, unsnoc_case]);
-    add_cases("<", cc![ilt_case, flt_case]);
-    add_cases(">", cc![igt_case, fgt_case]);
-    add_cases("‹", cc![id_int_case, ffloor_case, first_case]);
-    add_cases("‹", cc![id_int_case, ffloor_case, first_case]);
-    add_cases("›", cc![id_int_case, fceil_case, last_case]);
-    add_cases("«", cc![dec2_case, fdec2_case, butlast_case]);
-    add_cases("»", cc![inc2_case, finc2_case, rest_case]);
+    add_cases("%", cc![mod_case, map_case]);
+    add_cases("÷", cc![intdiv_case]);
+    add_cases("(", cc![dec_case, uncons_case]);
+    add_cases(")", cc![inc_case, unsnoc_case]);
+    add_cases("<", cc![lt_case]);
+    add_cases(">", cc![gt_case]);
+    add_cases("‹", cc![floor_case, first_case]);
+    add_cases("›", cc![ceil_case, last_case]);
+    add_cases("«", cc![dec2_case, butlast_case]);
+    add_cases("»", cc![inc2_case, rest_case]);
     add_cases("²", cc![square_case]);
 
     let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![a, a] });
@@ -998,58 +876,58 @@ fn initialize(env: &mut Environment) {
     add_cases("†", cc![pack_one_case]);
     let pack_two_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| cc![pd_list(vec![Rc::clone(a), Rc::clone(b)])] });
     add_cases("‡", cc![pack_two_case]);
-    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::PdInt(bi_iverson(!pd_truthy(a))))] });
+    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::from(bi_iverson(!pd_truthy(a))))] });
     add_cases("!", cc![not_case]);
 
-    // env.variables.insert("X".to_string(), Rc::new(PdObj::PdInt(3.to_bigint().unwrap())));
+    // env.variables.insert("X".to_string(), Rc::new(PdObj::Int(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::from('\n'));
     env.short_insert("A", PdObj::from(10));
     env.short_insert("¹", PdObj::from(11));
     env.short_insert("∅", PdObj::from(0));
     env.short_insert("α", PdObj::from(1));
-    env.short_insert("Ep", PdObj::PdFloat(1e-9));
+    env.short_insert("Ep", PdObj::Num(PdNum::Float(1e-9)));
 
-    env.short_insert(" ", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert(" ", PdObj::Block(Rc::new(BuiltIn {
         name: "Nop".to_string(),
         func: |_env| {},
     })));
-    env.short_insert("[", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert("[", PdObj::Block(Rc::new(BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); },
     })));
-    env.short_insert("]", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert("]", PdObj::Block(Rc::new(BuiltIn {
         name: "Pack".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
-            env.push(Rc::new(PdObj::PdList(Rc::new(list))));
+            env.push(Rc::new(PdObj::List(Rc::new(list))));
         },
     })));
-    env.short_insert("¬", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert("¬", PdObj::Block(Rc::new(BuiltIn {
         name: "Pack_reverse".to_string(),
         func: |env| {
             let mut list = env.pop_until_stack_marker();
             list.reverse();
-            env.push(Rc::new(PdObj::PdList(Rc::new(list))));
+            env.push(Rc::new(PdObj::List(Rc::new(list))));
         },
     })));
-    env.short_insert("~", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert("~", PdObj::Block(Rc::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
             match &*env.pop_or_panic("~ failed") {
-                PdObj::PdBlock(bb) => { bb.run(env); }
-                PdObj::PdList(ls) => { env.extend_clone(ls); }
+                PdObj::Block(bb) => { bb.run(env); }
+                PdObj::List(ls) => { env.extend_clone(ls); }
                 _ => { panic!("~ can't handle"); }
             }
         },
     })));
-    env.short_insert("O", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert("O", PdObj::Block(Rc::new(BuiltIn {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_or_panic("O failed");
             print!("{}", env.to_string(&obj));
         },
     })));
-    env.short_insert("P", PdObj::PdBlock(Rc::new(BuiltIn {
+    env.short_insert("P", PdObj::Block(Rc::new(BuiltIn {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_or_panic("P failed");
