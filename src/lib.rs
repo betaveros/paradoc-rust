@@ -138,8 +138,8 @@ impl Environment {
     }
 
     fn push_yx(&mut self) {
-        self.push_x(Rc::new(PdObj::String("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
-        self.push_x(Rc::new(PdObj::String("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+        self.push_x(Rc::new(PdObj::from("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+        self.push_x(Rc::new(PdObj::from("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
     }
     fn set_yx(&mut self, y: Rc<PdObj>, x: Rc<PdObj>) {
         let len = self.x_stack.len();
@@ -183,7 +183,7 @@ impl Environment {
     fn to_string(&self, obj: &Rc<PdObj>) -> String {
         match &**obj {
             PdObj::Num(n) => n.to_string(),
-            PdObj::String(s) => s.clone(),
+            PdObj::String(s) => s.to_string(),
             PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
             PdObj::Block(b) => b.code_repr(),
         }
@@ -229,7 +229,7 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) ->
 #[derive(Debug)]
 pub enum PdObj {
     Num(PdNum),
-    String(String),
+    String(Rc<str>),
     List(Rc<Vec<Rc<PdObj>>>),
     Block(Rc<dyn Block>),
 }
@@ -269,6 +269,17 @@ forward_from!(char);
 forward_from!(i32);
 forward_from!(f64);
 forward_from!(usize);
+
+impl From<String> for PdObj {
+    fn from(s: String) -> Self {
+        PdObj::String(Rc::from(s.as_str()))
+    }
+}
+impl From<&String> for PdObj {
+    fn from(s: &String) -> Self {
+        PdObj::String(Rc::from(s.as_str()))
+    }
+}
 
 struct BuiltIn {
     name: String,
@@ -334,7 +345,7 @@ fn just_num(obj: &PdObj) -> Option<PdNum> {
 
 pub enum PdSeq {
     List(Rc<Vec<Rc<PdObj>>>),
-    String(String),
+    String(Rc<str>),
     Range(BigInt, BigInt),
 }
 
@@ -397,7 +408,7 @@ impl Iterator for PdIter<'_> {
 fn just_seq(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::List(a) => Some(PdSeq::List(Rc::clone(a))),
-        PdObj::String(a) => Some(PdSeq::String(String::clone(a))),
+        PdObj::String(a) => Some(PdSeq::String(Rc::clone(a))),
         _ => None,
     }
 }
@@ -650,7 +661,7 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
     tokens.into_iter().map(|lex::Token(leader, trailer)| {
         let rcleader = match leader {
             lex::Leader::StringLit(s) => {
-                RcLeader::Lit(Rc::new(PdObj::String(s)))
+                RcLeader::Lit(Rc::new(PdObj::from(s)))
             }
             lex::Leader::IntLit(n) => {
                 RcLeader::Lit(Rc::new(PdObj::from(n)))
