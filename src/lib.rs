@@ -788,6 +788,8 @@ fn initialize(env: &mut Environment) {
 
     let lt_case = nn_n![a, b, PdNum::Int(bi_iverson(a < b))];
     let gt_case = nn_n![a, b, PdNum::Int(bi_iverson(a > b))];
+    let min_case = nn_n![a, b, PdNum::clone(a.min(b))];
+    let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
     let uncons_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_first().expect("Uncons of empty list");
@@ -836,6 +838,10 @@ fn initialize(env: &mut Environment) {
     add_cases(")", cc![inc_case, unsnoc_case]);
     add_cases("<", cc![lt_case]);
     add_cases(">", cc![gt_case]);
+    add_cases("<m", cc![min_case]);
+    add_cases(">m", cc![max_case]);
+    add_cases("Õ", cc![min_case]);
+    add_cases("Ã", cc![max_case]);
     add_cases("‹", cc![floor_case, first_case]);
     add_cases("›", cc![ceil_case, last_case]);
     add_cases("«", cc![dec2_case, butlast_case]);

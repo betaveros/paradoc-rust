@@ -94,6 +94,14 @@ impl PdNum {
             PdNum::Char(c) => PdNum::Char(c.pow(e)),
         }
     }
+
+    pub fn is_nan(&self) -> bool {
+        match self {
+            PdNum::Int(_) => false,
+            PdNum::Float(f) => f.is_nan(),
+            PdNum::Char(_) => false,
+        }
+    }
 }
 
 // this seems... nontrivial??
@@ -142,6 +150,58 @@ impl PartialOrd for PdNum {
             (PdNum::Char  (a), PdNum::Int   (b)) => Some(a.cmp(b)),
             (PdNum::Char  (a), PdNum::Float (b)) => cmp_bigint_f64(a, b),
             (PdNum::Char  (a), PdNum::Char  (b)) => Some(a.cmp(b)),
+        }
+    }
+}
+
+impl PdNum {
+    // (considers NaNs equal)
+    fn total_cmp_small_nan(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (PdNum::Int   (a), PdNum::Int   (b)) => a.cmp(b),
+            (PdNum::Int   (a), PdNum::Float (b)) => cmp_bigint_f64(a, b).unwrap_or(Ordering::Greater),
+            (PdNum::Int   (a), PdNum::Char  (b)) => a.cmp(b),
+            (PdNum::Float (a), PdNum::Int   (b)) => cmp_bigint_f64(b, a).map_or(Ordering::Less, |ord| ord.reverse()),
+            (PdNum::Float (a), PdNum::Float (b)) => a.partial_cmp(b).unwrap_or(b.is_nan().cmp(&a.is_nan())), // note swap
+            (PdNum::Float (a), PdNum::Char  (b)) => cmp_bigint_f64(b, a).map_or(Ordering::Less, |ord| ord.reverse()),
+            (PdNum::Char  (a), PdNum::Int   (b)) => a.cmp(b),
+            (PdNum::Char  (a), PdNum::Float (b)) => cmp_bigint_f64(a, b).unwrap_or(Ordering::Greater),
+            (PdNum::Char  (a), PdNum::Char  (b)) => a.cmp(b),
+        }
+    }
+
+    fn total_cmp_big_nan(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (PdNum::Int   (a), PdNum::Int   (b)) => a.cmp(b),
+            (PdNum::Int   (a), PdNum::Float (b)) => cmp_bigint_f64(a, b).unwrap_or(Ordering::Less),
+            (PdNum::Int   (a), PdNum::Char  (b)) => a.cmp(b),
+            (PdNum::Float (a), PdNum::Int   (b)) => cmp_bigint_f64(b, a).map_or(Ordering::Greater, |ord| ord.reverse()),
+            (PdNum::Float (a), PdNum::Float (b)) => a.partial_cmp(b).unwrap_or(a.is_nan().cmp(&b.is_nan())),
+            (PdNum::Float (a), PdNum::Char  (b)) => cmp_bigint_f64(b, a).map_or(Ordering::Greater, |ord| ord.reverse()),
+            (PdNum::Char  (a), PdNum::Int   (b)) => a.cmp(b),
+            (PdNum::Char  (a), PdNum::Float (b)) => cmp_bigint_f64(a, b).unwrap_or(Ordering::Less),
+            (PdNum::Char  (a), PdNum::Char  (b)) => a.cmp(b),
+        }
+    }
+}
+
+// https://github.com/rust-lang/rust/pull/64047 will give us these for free
+// note that we follow the Rust implementations and in particular the f64 implementations of min
+// and max: when equal, pretend the left is smaller than the right; if one of its inputs is NaN,
+// return the other
+
+impl PdNum {
+    pub fn min<'a>(&'a self, other: &'a Self) -> &'a PdNum {
+        match self.total_cmp_big_nan(other) {
+            Ordering::Greater => other,
+            _ => self,
+        }
+    }
+
+    pub fn max<'a>(&'a self, other: &'a Self) -> &'a PdNum {
+        match self.total_cmp_small_nan(other) {
+            Ordering::Less => self,
+            _ => other,
         }
     }
 }
