@@ -5,10 +5,8 @@ use std::rc::Rc;
 use std::slice::Iter;
 use std::fmt::Debug;
 use std::mem;
-use num::Integer;
 use num_iter;
 use num::bigint::BigInt;
-use num::bigint::ToBigInt;
 use num_traits::pow::Pow;
 use std::collections::HashMap;
 
@@ -236,21 +234,6 @@ pub enum PdObj {
     Block(Rc<dyn Block>),
 }
 
-// this seems... nontrivial??
-fn cmp_bigint_f64(a: &BigInt, b: &f64) -> Option<Ordering> {
-    if let Some(bi) = b.to_bigint() {
-        Some(a.cmp(&bi))
-    } else {
-        b.floor().to_bigint().map(|bi| {
-            match a.cmp(&bi) {
-                Ordering::Less    => Ordering::Less,
-                Ordering::Equal   => Ordering::Less,
-                Ordering::Greater => Ordering::Greater,
-            }
-        })
-    }
-}
-
 impl PartialEq for PdObj {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -261,9 +244,6 @@ impl PartialEq for PdObj {
         }
     }
 }
-
-// TODO: Watch https://github.com/rust-lang/rust/issues/72599, we will probably want total
-// orderings in some cases.
 
 impl PartialOrd for PdObj {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -276,21 +256,19 @@ impl PartialOrd for PdObj {
     }
 }
 
-impl From<BigInt> for PdObj {
-    fn from(n: BigInt) -> Self { PdObj::Num(PdNum::Int(n)) }
+macro_rules! forward_from {
+    ($ty:ident) => {
+        impl From<$ty> for PdObj {
+            fn from(n: $ty) -> Self { PdObj::Num(PdNum::from(n)) }
+        }
+    }
 }
-impl From<char> for PdObj {
-    fn from(c: char) -> Self { PdObj::Num(PdNum::Char(BigInt::from(c as u32))) }
-}
-impl From<i32> for PdObj {
-    fn from(x: i32) -> Self { PdObj::from(BigInt::from(x)) }
-}
-impl From<f64> for PdObj {
-    fn from(x: f64) -> Self { PdObj::Num(PdNum::Float(x)) }
-}
-impl From<usize> for PdObj {
-    fn from(x: usize) -> Self { PdObj::from(BigInt::from(x)) }
-}
+
+forward_from!(BigInt);
+forward_from!(char);
+forward_from!(i32);
+forward_from!(f64);
+forward_from!(usize);
 
 struct BuiltIn {
     name: String,
@@ -748,7 +726,7 @@ fn pd_truthy(x: &PdObj) -> bool {
 
 fn pd_deep_length(x: &PdObj) -> usize {
     match x {
-        PdObj::Num(n) => 1,
+        PdObj::Num(_) => 1,
         PdObj::String(ss) => ss.chars().count(),
         PdObj::List(v) => v.iter().map(|x| pd_deep_length(&*x)).sum(),
         PdObj::Block(_) => { panic!("wtf not deep"); }
@@ -769,6 +747,22 @@ fn pd_deep_square_sum(x: &PdObj) -> PdNum {
         PdObj::Num(n) => n * n,
         PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32).pow(2u32)).sum()),
         PdObj::List(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
+        PdObj::Block(_) => { panic!("wtf not deep"); }
+    }
+}
+
+fn pd_deep_standard_deviation(x: &PdObj) -> Option<PdNum> {
+    let c = PdNum::from(pd_deep_length(x));
+    let s = pd_deep_sum(x);
+    let q = pd_deep_square_sum(x);
+    ((&(q - s.pow(2u32)) / &c) / (&c - &PdNum::from(1))).sqrt()
+}
+
+fn pd_deep_product(x: &PdObj) -> PdNum {
+    match x {
+        PdObj::Num(n) => n.clone(),
+        PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32)).product()),
+        PdObj::List(v) => v.iter().map(|x| pd_deep_product(&*x)).product(),
         PdObj::Block(_) => { panic!("wtf not deep"); }
     }
 }
@@ -878,6 +872,21 @@ fn initialize(env: &mut Environment) {
     add_cases("‡", cc![pack_two_case]);
     let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::from(bi_iverson(!pd_truthy(a))))] });
     add_cases("!", cc![not_case]);
+
+    let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::Num(pd_deep_sum(a)))] });
+    add_cases("Š", cc![sum_case]);
+
+    let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::Num(pd_deep_product(a)))] });
+    add_cases("Þ", cc![product_case]);
+
+    let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::Num(pd_deep_sum(a) / PdNum::Float(pd_deep_length(a) as f64)))] });
+    add_cases("Av", cc![average_case]);
+
+    let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::Num(pd_deep_square_sum(a).sqrt().expect("sqrt in hypotenuse failed")))] });
+    add_cases("Hy", cc![hypotenuse_case]);
+
+    let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| cc![Rc::new(PdObj::Num(pd_deep_standard_deviation(a).expect("sqrt in hypotenuse failed")))] });
+    add_cases("Sg", cc![standard_deviation_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::Int(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::from('\n'));

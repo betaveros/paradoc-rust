@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use num::bigint::BigInt;
+// use num::bigint::BigInt;
 extern crate paradoc;
 
 fn int(x: i32) -> Rc<paradoc::PdObj> {

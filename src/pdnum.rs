@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
-use std::ops::{Add, Sub, Mul, Div, Rem};
+use std::ops::{Add, Sub, Mul, Div, Rem, Neg};
 use std::ops::AddAssign;
-use std::iter::Sum;
+use std::iter::{Sum, Product};
 use std::mem;
 use num::Integer;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
+use num_traits::pow::Pow;
 use num_traits::cast::ToPrimitive;
 
 #[derive(Debug, Clone)]
@@ -13,6 +14,22 @@ pub enum PdNum {
     Int(BigInt),
     Float(f64),
     Char(BigInt),
+}
+
+impl From<BigInt> for PdNum {
+    fn from(x: BigInt) -> Self { PdNum::Int(x) }
+}
+impl From<char> for PdNum {
+    fn from(c: char) -> Self { PdNum::Char(BigInt::from(c as u32)) }
+}
+impl From<i32> for PdNum {
+    fn from(x: i32) -> Self { PdNum::Int(BigInt::from(x)) }
+}
+impl From<f64> for PdNum {
+    fn from(x: f64) -> Self { PdNum::Float(x) }
+}
+impl From<usize> for PdNum {
+    fn from(x: usize) -> Self { PdNum::Int(BigInt::from(x)) }
 }
 
 impl PdNum {
@@ -28,16 +45,16 @@ impl PdNum {
 
     pub fn ceil(&self) -> PdNum {
         match self {
-            PdNum::Int(n) => self.clone(),
-            PdNum::Char(c) => self.clone(),
+            PdNum::Int(_) => self.clone(),
+            PdNum::Char(_) => self.clone(),
             PdNum::Float(f) => PdNum::Int(f.ceil().to_bigint().expect("Ceiling of float was not integer")),
         }
     }
 
     pub fn floor(&self) -> PdNum {
         match self {
-            PdNum::Int(n) => self.clone(),
-            PdNum::Char(c) => self.clone(),
+            PdNum::Int(_) => self.clone(),
+            PdNum::Char(_) => self.clone(),
             PdNum::Float(f) => PdNum::Int(f.floor().to_bigint().expect("Floor of float was not integer")),
         }
     }
@@ -63,6 +80,18 @@ impl PdNum {
             PdNum::Int(i) => i.to_f64(),
             PdNum::Float(f) => Some(*f),
             PdNum::Char(c) => c.to_f64(),
+        }
+    }
+
+    pub fn sqrt(&self) -> Option<PdNum> {
+        self.to_f64().map(|x| PdNum::Float(x.sqrt()))
+    }
+
+    pub fn pow(&self, e: u32) -> PdNum {
+        match self {
+            PdNum::Int(i) => PdNum::Int(i.pow(e)),
+            PdNum::Float(f) => PdNum::Float(f.powi(e as i32)),
+            PdNum::Char(c) => PdNum::Char(c.pow(e)),
         }
     }
 }
@@ -94,7 +123,6 @@ impl PartialEq for PdNum {
             (PdNum::Char  (a), PdNum::Int   (b)) => a == b,
             (PdNum::Char  (a), PdNum::Float (b)) => b.to_bigint().map_or(false, |x| &x == a),
             (PdNum::Char  (a), PdNum::Char  (b)) => a == b,
-            _ => false,
         }
     }
 }
@@ -114,7 +142,6 @@ impl PartialOrd for PdNum {
             (PdNum::Char  (a), PdNum::Int   (b)) => Some(a.cmp(b)),
             (PdNum::Char  (a), PdNum::Float (b)) => cmp_bigint_f64(a, b),
             (PdNum::Char  (a), PdNum::Char  (b)) => Some(a.cmp(b)),
-            _ => None,
         }
     }
 }
@@ -145,6 +172,16 @@ macro_rules! def_binary_method {
     };
 }
 
+macro_rules! forward_impl_binary_method {
+    ($imp:ident, $method:ident) => {
+        impl $imp<PdNum> for PdNum {
+            type Output = PdNum;
+
+            fn $method(self, other: PdNum) -> PdNum { (&self).$method(&other) }
+        }
+    };
+}
+
 macro_rules! impl_binary_method {
     ($imp:ident, $method:ident, $intmethod:expr, $floatmethod:expr) => {
         impl $imp<&PdNum> for &PdNum {
@@ -152,6 +189,8 @@ macro_rules! impl_binary_method {
 
             def_binary_method!($method, $intmethod, $floatmethod);
         }
+
+        forward_impl_binary_method!($imp, $method);
     };
 }
 
@@ -173,10 +212,18 @@ impl Div<&PdNum> for &PdNum {
     }
 }
 
-impl Add<PdNum> for PdNum {
+forward_impl_binary_method!(Div, div);
+
+impl Neg for PdNum {
     type Output = PdNum;
 
-    fn add(self, other: PdNum) -> PdNum { (&self).add(&other) }
+    fn neg(self) -> PdNum {
+        match self {
+            PdNum::Int(n) => PdNum::Int(-n),
+            PdNum::Float(f) => PdNum::Float(-f),
+            PdNum::Char(c) => PdNum::Char(-c),
+        }
+    }
 }
 
 impl AddAssign<&PdNum> for PdNum {
@@ -189,5 +236,11 @@ impl AddAssign<&PdNum> for PdNum {
 impl Sum for PdNum {
     fn sum<I: Iterator<Item=Self>>(iter: I) -> Self {
         iter.fold(PdNum::Int(BigInt::from(0)), Add::add)
+    }
+}
+
+impl Product for PdNum {
+    fn product<I: Iterator<Item=Self>>(iter: I) -> Self {
+        iter.fold(PdNum::Int(BigInt::from(1)), Mul::mul)
     }
 }
