@@ -183,7 +183,7 @@ impl Environment {
     fn to_string(&self, obj: &Rc<PdObj>) -> String {
         match &**obj {
             PdObj::Num(n) => n.to_string(),
-            PdObj::String(s) => s.to_string(),
+            PdObj::String(s) => s.iter().collect::<String>(),
             PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
             PdObj::Block(b) => b.code_repr(),
         }
@@ -229,7 +229,7 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) ->
 #[derive(Debug)]
 pub enum PdObj {
     Num(PdNum),
-    String(Rc<str>),
+    String(Rc<Vec<char>>),
     List(Rc<Vec<Rc<PdObj>>>),
     Block(Rc<dyn Block>),
 }
@@ -272,12 +272,12 @@ forward_from!(usize);
 
 impl From<String> for PdObj {
     fn from(s: String) -> Self {
-        PdObj::String(Rc::from(s.as_str()))
+        PdObj::String(Rc::new(s.chars().collect()))
     }
 }
 impl From<&String> for PdObj {
     fn from(s: &String) -> Self {
-        PdObj::String(Rc::from(s.as_str()))
+        PdObj::String(Rc::new(s.chars().collect()))
     }
 }
 
@@ -345,13 +345,13 @@ fn just_num(obj: &PdObj) -> Option<PdNum> {
 
 pub enum PdSeq {
     List(Rc<Vec<Rc<PdObj>>>),
-    String(Rc<str>),
+    String(Rc<Vec<char>>),
     Range(BigInt, BigInt),
 }
 
 pub enum PdIter<'a> {
     List(Iter<'a, Rc<PdObj>>),
-    String(std::str::Chars<'a>),
+    String(Iter<'a, char>), // String(std::str::Chars<'a>),
     Range(num_iter::Range<BigInt>),
 }
 
@@ -359,7 +359,7 @@ impl PdSeq {
     fn iter(&self) -> PdIter<'_> {
         match self {
             PdSeq::List(v) => PdIter::List(v.iter()),
-            PdSeq::String(s) => PdIter::String(s.chars()),
+            PdSeq::String(s) => PdIter::String(s.iter()),
             PdSeq::Range(a, b) => PdIter::Range(num_iter::range(BigInt::clone(a), BigInt::clone(b))),
         }
     }
@@ -370,7 +370,7 @@ impl PdSeq {
     fn to_new_vec(&self) -> Vec<Rc<PdObj>> {
         match self {
             PdSeq::List(v) => (&**v).clone(),
-            PdSeq::String(s) => s.chars().map(|x| Rc::new(PdObj::from(x))).collect(),
+            PdSeq::String(s) => s.iter().map(|x| Rc::new(PdObj::from(*x))).collect(),
             PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| Rc::new(PdObj::from(x))).collect(),
         }
     }
@@ -379,7 +379,7 @@ impl PdSeq {
     fn first(&self) -> Option<Rc<PdObj>> {
         match self {
             PdSeq::List(v) => v.first().map(Rc::clone),
-            PdSeq::String(s) => s.chars().next().map(|x| Rc::new(PdObj::from(x))),
+            PdSeq::String(s) => s.first().map(|x| Rc::new(PdObj::from(*x))),
             PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(BigInt::clone(a)))) } else { None },
         }
     }
@@ -387,7 +387,7 @@ impl PdSeq {
     fn last(&self) -> Option<Rc<PdObj>> {
         match self {
             PdSeq::List(v) => v.last().map(Rc::clone),
-            PdSeq::String(s) => s.chars().rev().next().map(|x| Rc::new(PdObj::from(x))),
+            PdSeq::String(s) => s.last().map(|x| Rc::new(PdObj::from(*x))),
             PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(b - 1))) } else { None },
         }
     }
@@ -399,7 +399,7 @@ impl Iterator for PdIter<'_> {
     fn next(&mut self) -> Option<Rc<PdObj>> {
         match self {
             PdIter::List(it) => it.next().map(Rc::clone),
-            PdIter::String(cs) => cs.next().map(|x| Rc::new(PdObj::from(x))),
+            PdIter::String(cs) => cs.next().map(|x| Rc::new(PdObj::from(*x))),
             PdIter::Range(rs) => rs.next().map(|x| Rc::new(PdObj::from(x))),
         }
     }
@@ -805,7 +805,7 @@ fn pd_truthy(x: &PdObj) -> bool {
 fn pd_deep_length(x: &PdObj) -> usize {
     match x {
         PdObj::Num(_) => 1,
-        PdObj::String(ss) => ss.chars().count(),
+        PdObj::String(ss) => ss.len(),
         PdObj::List(v) => v.iter().map(|x| pd_deep_length(&*x)).sum(),
         PdObj::Block(_) => { panic!("wtf not deep"); }
     }
@@ -814,7 +814,7 @@ fn pd_deep_length(x: &PdObj) -> usize {
 fn pd_deep_sum(x: &PdObj) -> PdNum {
     match x {
         PdObj::Num(n) => n.clone(),
-        PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32)).sum()),
+        PdObj::String(ss) => PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32)).sum()),
         PdObj::List(v) => v.iter().map(|x| pd_deep_sum(&*x)).sum(),
         PdObj::Block(_) => { panic!("wtf not deep"); }
     }
@@ -823,7 +823,7 @@ fn pd_deep_sum(x: &PdObj) -> PdNum {
 fn pd_deep_square_sum(x: &PdObj) -> PdNum {
     match x {
         PdObj::Num(n) => n * n,
-        PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32).pow(2u32)).sum()),
+        PdObj::String(ss) => PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32).pow(2u32)).sum()),
         PdObj::List(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
         PdObj::Block(_) => { panic!("wtf not deep"); }
     }
@@ -839,7 +839,7 @@ fn pd_deep_standard_deviation(x: &PdObj) -> Option<PdNum> {
 fn pd_deep_product(x: &PdObj) -> PdNum {
     match x {
         PdObj::Num(n) => n.clone(),
-        PdObj::String(ss) => PdNum::Char(ss.chars().map(|x| BigInt::from(x as u32)).product()),
+        PdObj::String(ss) => PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32)).product()),
         PdObj::List(v) => v.iter().map(|x| pd_deep_product(&*x)).product(),
         PdObj::Block(_) => { panic!("wtf not deep"); }
     }
