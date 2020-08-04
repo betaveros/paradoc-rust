@@ -5,7 +5,7 @@ use paradoc::Block;
 fn prompt(input: &mut String) -> bool {
     input.clear();
     print!("prdc-rs> ");
-    io::stdout().flush();
+    if io::stdout().flush().is_err() { return false }
 
     match io::stdin().read_line(input) {
         Ok(0) => false,
