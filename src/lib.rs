@@ -96,19 +96,16 @@ impl Environment {
         }
         // TODO: stack trigger
     }
-    fn pop_or_panic(&mut self, panic_msg: &'static str) -> Rc<PdObj> {
-        match self.pop() {
-            None => { panic!(panic_msg); }
-            Some(x) => x
-        }
+    fn pop_result(&mut self, _err_msg: &'static str) -> Result<Rc<PdObj>, PdError> {
+        self.pop().ok_or(PdError::EmptyStack)
     }
-    fn pop_n_or_panic(&mut self, n: usize, panic_msg: &'static str) -> Vec<Rc<PdObj>> {
+    fn pop_n_result(&mut self, n: usize, err_msg: &'static str) -> Result<Vec<Rc<PdObj>>, PdError> {
         let mut ret: Vec<Rc<PdObj>> = Vec::new();
         for _ in 0..n {
-            ret.push(self.pop_or_panic(panic_msg));
+            ret.push(self.pop_result(err_msg)?);
         }
         ret.reverse();
-        ret
+        Ok(ret)
     }
 
     fn take_stack(&mut self) -> Vec<Rc<PdObj>> {
@@ -231,7 +228,7 @@ impl Environment {
 }
 
 pub trait Block : Debug {
-    fn run(&self, env: &mut Environment) -> ();
+    fn run(&self, env: &mut Environment) -> PdUnit;
     fn code_repr(&self) -> String;
 }
 
@@ -249,6 +246,16 @@ pub enum PdObj {
     List(Rc<Vec<Rc<PdObj>>>),
     Block(Rc<dyn Block>),
 }
+
+#[derive(Debug)]
+pub enum PdError {
+    EmptyStack,
+    UndefinedVariable,
+    InapplicableTrailer,
+    BadArgument(String),
+}
+
+type PdUnit = Result<(), PdError>;
 
 impl PartialEq for PdObj {
     fn eq(&self, other: &Self) -> bool {
@@ -304,7 +311,7 @@ impl From<&String> for PdObj {
 
 struct BuiltIn {
     name: String,
-    func: fn(&mut Environment) -> (),
+    func: fn(&mut Environment) -> PdUnit,
 }
 
 impl Debug for BuiltIn {
@@ -313,8 +320,8 @@ impl Debug for BuiltIn {
     }
 }
 impl Block for BuiltIn {
-    fn run(&self, env: &mut Environment) {
-        (self.func)(env);
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        (self.func)(env)
     }
     fn code_repr(&self) -> String {
         self.name.clone()
@@ -550,7 +557,7 @@ impl Debug for CasedBuiltIn {
     }
 }
 impl Block for CasedBuiltIn {
-    fn run(&self, env: &mut Environment) {
+    fn run(&self, env: &mut Environment) -> PdUnit {
         let mut done = false;
         let mut accumulated_args: Vec<Rc<PdObj>> = Vec::new();
         for case in &self.cases {
@@ -587,8 +594,10 @@ impl Block for CasedBuiltIn {
                 }
             }
         }
-        if !done {
-            panic!("No cases of {} applied!", self.name);
+        if done {
+            Ok(())
+        } else {
+            Err(PdError::BadArgument(format!("No cases of {} applied!", self.name)))
         }
     }
     fn code_repr(&self) -> String {
@@ -606,9 +615,10 @@ impl Debug for DeepBinaryOpBlock {
     }
 }
 impl Block for DeepBinaryOpBlock {
-    fn run(&self, env: &mut Environment) {
-        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &*env.pop_or_panic("deep binary op no stack"));
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &*env.pop_result("deep binary op no stack")?);
         env.push(Rc::new(res));
+        Ok(())
     }
     fn code_repr(&self) -> String {
         self.other.to_string() + "_???_binary_op"
@@ -620,17 +630,18 @@ struct EachBlock {
     body: Rc<dyn Block>,
 }
 impl Block for EachBlock {
-    fn run(&self, env: &mut Environment) {
+    fn run(&self, env: &mut Environment) -> PdUnit {
         // TODO: literally everything
         // Extract into sandbox; push x-stack; handle continue/breaks
-        match seq_range(&*env.pop_or_panic("each no stack")) {
+        match seq_range(&*env.pop_result("each no stack")?) {
             Some(vec) => {
                 for obj in vec.iter() {
                     env.push(Rc::clone(&obj));
                     self.body.run(env);
                 }
+                Ok(())
             }
-            _ => { panic!("each failed") }
+            _ => Err(PdError::BadArgument("each".to_string())),
         }
     }
     fn code_repr(&self) -> String {
@@ -654,13 +665,14 @@ struct MapBlock {
     body: Rc<dyn Block>,
 }
 impl Block for MapBlock {
-    fn run(&self, env: &mut Environment) {
-        match seq_range(&*env.pop_or_panic("map no stack")) {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        match seq_range(&*env.pop_result("map no stack")?) {
             Some(vec) => {
                 let res = pd_map(env, &self.body, vec.iter());
                 env.push(Rc::new(PdObj::List(Rc::new(res))));
+                Ok(())
             }
-            _ => { panic!("map coercion failed") }
+            _ => Err(PdError::BadArgument("map coercion".to_string())),
         }
     }
     fn code_repr(&self) -> String {
@@ -673,10 +685,11 @@ struct UnderBlock {
     body: Rc<dyn Block>,
 }
 impl Block for UnderBlock {
-    fn run(&self, env: &mut Environment) {
-        let obj = env.pop_or_panic("under no stack");
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let obj = env.pop_result("under no stack")?;
         self.body.run(env);
         env.push(obj);
+        Ok(())
     }
     fn code_repr(&self) -> String {
         self.body.code_repr() + "_under"
@@ -688,12 +701,13 @@ struct KeepBlock {
     body: Rc<dyn Block>,
 }
 impl Block for KeepBlock {
-    fn run(&self, env: &mut Environment) {
+    fn run(&self, env: &mut Environment) -> PdUnit {
         let res = env.run_on_bracketed_shadow(ShadowType::Keep, |inner| {
             self.body.run(inner);
             inner.take_stack()
         });
         env.extend(res);
+        Ok(())
     }
     fn code_repr(&self) -> String {
         self.body.code_repr() + "_keep"
@@ -705,14 +719,15 @@ struct KeepUnderBlock {
     body: Rc<dyn Block>,
 }
 impl Block for KeepUnderBlock {
-    fn run(&self, env: &mut Environment) {
+    fn run(&self, env: &mut Environment) -> PdUnit {
         let (res, arity) = env.run_on_bracketed_shadow_with_arity(ShadowType::Keep, |inner| {
             self.body.run(inner);
             inner.take_stack()
         });
-        let temp = env.pop_n_or_panic(arity, "keepunder stack failed");
+        let temp = env.pop_n_result(arity, "keepunder stack failed")?;
         env.extend(res);
         env.extend(temp);
+        Ok(())
     }
     fn code_repr(&self) -> String {
         self.body.code_repr() + "_keepunder"
@@ -830,17 +845,17 @@ fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailer
 }
 
 impl Block for CodeBlock {
-    fn run(&self, mut env: &mut Environment) {
+    fn run(&self, mut env: &mut Environment) -> PdUnit {
         for RcToken(leader, trailer) in &self.0 {
             // println!("{:?} {:?}", leader, trailer);
             // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    apply_all_trailers(Rc::clone(obj), true, trailer).expect("Could not apply trailers to literal")
+                    apply_all_trailers(Rc::clone(obj), true, trailer).ok_or(PdError::InapplicableTrailer)?
                 }
                 RcLeader::Var(s) => {
-                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).expect("Undefined variable!");
-                    apply_all_trailers(Rc::clone(obj), false, rest).expect("Could not apply trailers to variable")
+                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable)?;
+                    apply_all_trailers(Rc::clone(obj), false, rest).ok_or(PdError::InapplicableTrailer)?
                 }
             };
 
@@ -850,6 +865,7 @@ impl Block for CodeBlock {
                 apply_on(&mut env, obj);
             }
         }
+        Ok(())
     }
     fn code_repr(&self) -> String {
         "???".to_string()
@@ -1099,21 +1115,22 @@ pub fn initialize(env: &mut Environment) {
 
     env.short_insert(" ", PdObj::Block(Rc::new(BuiltIn {
         name: "Nop".to_string(),
-        func: |_env| {},
+        func: |_env| Ok(()),
     })));
     env.short_insert("\n", PdObj::Block(Rc::new(BuiltIn {
         name: "Nop".to_string(),
-        func: |_env| {},
+        func: |_env| Ok(()),
     })));
     env.short_insert("[", PdObj::Block(Rc::new(BuiltIn {
         name: "Mark_stack".to_string(),
-        func: |env| { env.mark_stack(); },
+        func: |env| { env.mark_stack(); Ok(()) },
     })));
     env.short_insert("]", PdObj::Block(Rc::new(BuiltIn {
         name: "Pack".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
             env.push(Rc::new(PdObj::List(Rc::new(list))));
+            Ok(())
         },
     })));
     env.short_insert("¬", PdObj::Block(Rc::new(BuiltIn {
@@ -1122,30 +1139,34 @@ pub fn initialize(env: &mut Environment) {
             let mut list = env.pop_until_stack_marker();
             list.reverse();
             env.push(Rc::new(PdObj::List(Rc::new(list))));
+            Ok(())
         },
     })));
     env.short_insert("~", PdObj::Block(Rc::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
-            match &*env.pop_or_panic("~ failed") {
+            match &*env.pop_result("~ failed")? {
                 PdObj::Block(bb) => { bb.run(env); }
                 PdObj::List(ls) => { env.extend_clone(ls); }
                 _ => { panic!("~ can't handle"); }
-            }
+            };
+            Ok(())
         },
     })));
     env.short_insert("O", PdObj::Block(Rc::new(BuiltIn {
         name: "Print".to_string(),
         func: |env| {
-            let obj = env.pop_or_panic("O failed");
+            let obj = env.pop_result("O failed")?;
             print!("{}", env.to_string(&obj));
+            Ok(())
         },
     })));
     env.short_insert("P", PdObj::Block(Rc::new(BuiltIn {
         name: "Print".to_string(),
         func: |env| {
-            let obj = env.pop_or_panic("P failed");
+            let obj = env.pop_result("P failed")?;
             println!("{}", env.to_string(&obj));
+            Ok(())
         },
     })));
 }
