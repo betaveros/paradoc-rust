@@ -13,7 +13,11 @@ use std::collections::HashMap;
 
 mod lex;
 mod pdnum;
+mod pderror;
+mod input;
 use crate::pdnum::PdNum;
+use crate::pderror::{PdError, PdResult, PdUnit};
+use crate::input::{InputTrigger, ReadValue, EOFReader};
 
 #[derive(Debug)]
 pub struct Environment {
@@ -23,6 +27,8 @@ pub struct Environment {
     marker_stack: Vec<usize>,
     // hmmm...
     shadow: Option<ShadowState>,
+    input_trigger: Option<InputTrigger>,
+    reader: Option<EOFReader>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +97,12 @@ impl Environment {
             }
             None => match &mut self.shadow {
                 Some(inner) => inner.pop(),
-                None => None
+                None => match (&mut self.reader, self.input_trigger) {
+                    (Some(r), Some(t)) => {
+                        r.read(t).expect("io error in input trigger").map(|v| Rc::new(PdObj::from(v)))
+                    }
+                    _ => None
+                }
             }
         }
         // TODO: stack trigger
@@ -174,6 +185,8 @@ impl Environment {
             variables: HashMap::new(),
             marker_stack: Vec::new(),
             shadow: None,
+            input_trigger: None,
+            reader: None,
         }
     }
 
@@ -216,6 +229,8 @@ impl Environment {
             variables: HashMap::new(),
             marker_stack: vec![0],
             shadow: Some(ShadowState { env: Box::new(env), arity: 0, shadow_type }),
+            input_trigger: None,
+            reader: None,
         };
 
         let ret = body(&mut benv)?;
@@ -247,19 +262,6 @@ pub enum PdObj {
     List(Rc<Vec<Rc<PdObj>>>),
     Block(Rc<dyn Block>),
 }
-
-#[derive(Debug)]
-pub enum PdError {
-    EmptyStack(String),
-    UndefinedVariable,
-    InapplicableTrailer,
-    BadArgument(String),
-    BadList(&'static str),
-    NumericError(&'static str),
-}
-
-type PdResult<T> = Result<T, PdError>;
-type PdUnit = PdResult<()>;
 
 impl PartialEq for PdObj {
     fn eq(&self, other: &Self) -> bool {
@@ -310,6 +312,17 @@ impl From<String> for PdObj {
 impl From<&String> for PdObj {
     fn from(s: &String) -> Self {
         PdObj::String(Rc::new(s.chars().collect()))
+    }
+}
+impl From<ReadValue> for PdObj {
+    fn from(v: ReadValue) -> Self {
+        match v {
+            ReadValue::String(s) => PdObj::from(s),
+            ReadValue::Char(c) => PdObj::from(c),
+            ReadValue::Int(n) => PdObj::from(n),
+            ReadValue::Float(f) => PdObj::from(f),
+            ReadValue::List(v) => PdObj::List(Rc::new(v.into_iter().map(|x| Rc::new(PdObj::from(x))).collect())),
+        }
     }
 }
 
