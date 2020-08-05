@@ -802,20 +802,27 @@ impl CodeBlock {
     }
 }
 
-fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> Option<(Rc<PdObj>, bool)> {
+fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> PdResult<(Rc<PdObj>, bool)> {
     let body: Rc<dyn Block> = Rc::clone(bb);
-    Some((Rc::new(PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
+    Ok((Rc::new(PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
 }
-fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
+fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Trailer) -> PdResult<(Rc<PdObj>, bool)> {
     match &**obj {
         PdObj::Num(n) => match trailer.0.as_ref() {
             "p" | "_p" | "_power" => {
                 let exponent: PdNum = PdNum::clone(n);
-                Some((Rc::new(PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
+                Ok((Rc::new(PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
             }
-            _ => None
+            _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
         PdObj::Block(bb) => match trailer.0.as_ref() {
+            "b" | "_b" | "_bind" => {
+                let b = outer_env.pop_result("bind nothing to bind")?;
+                Ok((Rc::new(PdObj::Block(Rc::new(BindBlock {
+                    body: Rc::clone(bb),
+                    bound_object: b,
+                }))), true))
+            }
             "e" | "_e" | "_each" => obb("each", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "each")?;
                 for obj in seq.iter() {
@@ -881,19 +888,19 @@ fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, 
                 Ok(())
             }),
 
-            _ => None
+            _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
-        _ => None
+        _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
     }
 }
 
-fn apply_all_trailers(mut obj: Rc<PdObj>, mut reluctant: bool, trailer: &[lex::Trailer]) -> Option<(Rc<PdObj>, bool)> {
+fn apply_all_trailers(env: &mut Environment, mut obj: Rc<PdObj>, mut reluctant: bool, trailer: &[lex::Trailer]) -> PdResult<(Rc<PdObj>, bool)> {
     for t in trailer {
-        let np = apply_trailer(&obj, t)?; // unwraps or returns None from entire function
+        let np = apply_trailer(env, &obj, t)?; // unwraps or returns Err from entire function
         obj = np.0;
         reluctant = np.1;
     }
-    Some((obj, reluctant))
+    Ok((obj, reluctant))
 }
 
 fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailers: &'b[lex::Trailer]) -> Option<(&'a Rc<PdObj>, &'b[lex::Trailer])> {
@@ -938,11 +945,12 @@ impl Block for CodeBlock {
             // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    apply_all_trailers(Rc::clone(obj), true, trailer).ok_or(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))?
+                    apply_all_trailers(env, Rc::clone(obj), true, trailer)?
                 }
                 RcLeader::Var(s) => {
                     let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(String::clone(s)))?;
-                    apply_all_trailers(Rc::clone(obj), false, rest).ok_or(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))?
+                    let cobj = Rc::clone(obj); // borrow checker to drop obj which unborrows env
+                    apply_all_trailers(env, cobj, false, rest)?
                 }
             };
 
