@@ -22,7 +22,10 @@ fn main() {
     while prompt(&mut input) {
         let block = paradoc::CodeBlock::parse(&input);
 
-        block.run(&mut env);
+        match block.run(&mut env) {
+            Ok(()) => {},
+            Err(e) => { println!("ERROR: {:?}", e); }
+        }
 
         println!("{}", env.stack_to_repr_string());
     }
