@@ -45,6 +45,12 @@ pub struct EOFReader {
     eof: bool,
 }
 
+impl EOFReader {
+    pub fn new(reader: Box<dyn BufRead>) -> EOFReader {
+        EOFReader { reader, eof: false }
+    }
+}
+
 impl Debug for EOFReader {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(fmt, "EOFReader {{ eof: {:?}, reader: ??? }}", self.eof)

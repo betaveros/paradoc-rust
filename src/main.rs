@@ -16,7 +16,7 @@ fn prompt(input: &mut String) -> bool {
 }
 
 fn repl() {
-    let mut env = paradoc::Environment::new();
+    let mut env = paradoc::Environment::new_with_stdin();
     paradoc::initialize(&mut env);
 
     let mut input = String::new();
@@ -45,7 +45,7 @@ fn main() {
 
                     // println!("{:?}", block);
 
-                    let mut env = paradoc::Environment::new();
+                    let mut env = paradoc::Environment::new_with_stdin();
                     paradoc::initialize(&mut env);
 
                     match block.run(&mut env) {

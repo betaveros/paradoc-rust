@@ -10,7 +10,7 @@ pub enum Leader {
     IntLit(BigInt),
     CharLit(char),
     FloatLit(f64),
-    Block(Box<Vec<Token>>),
+    Block(Vec<Trailer>, Vec<Token>),
     Var(String),
 }
 
@@ -55,7 +55,7 @@ pub fn lex(code: &str) -> (&str, Vec<(&str, &str)>) {
     }
     assert!(i == code.len(), "didn't finish lexing!");
 
-    println!("{:?}", tokens);
+    // println!("{:?}", tokens);
 
     (init_trailer_str, tokens)
 }
@@ -142,8 +142,9 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
             Some('{') => {
                 let (inner, ni) = parse_at(tokens, cur + 1);
                 assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
+                let start_trailers = parse_trailer(trailer);
                 trailer = tokens[ni].1;
-                (Leader::Block(Box::new(inner)), ni + 1)
+                (Leader::Block(start_trailers, inner), ni + 1)
             }
             Some('}') => { break; }
             None => { break; }

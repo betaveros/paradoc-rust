@@ -81,6 +81,16 @@ impl Environment {
             self.push(Rc::clone(obj))
         }
     }
+
+    fn run_stack_trigger(&mut self) -> Option<Rc<PdObj>> {
+        match (&mut self.reader, self.input_trigger) {
+            (Some(r), Some(t)) => {
+                r.read(t).expect("io error in input trigger").map(|v| Rc::new(PdObj::from(v)))
+            }
+            _ => None
+        }
+    }
+
     fn pop(&mut self) -> Option<Rc<PdObj>> {
         let len = self.stack.len();
         let ret = self.stack.pop();
@@ -97,15 +107,9 @@ impl Environment {
             }
             None => match &mut self.shadow {
                 Some(inner) => inner.pop(),
-                None => match (&mut self.reader, self.input_trigger) {
-                    (Some(r), Some(t)) => {
-                        r.read(t).expect("io error in input trigger").map(|v| Rc::new(PdObj::from(v)))
-                    }
-                    _ => None
-                }
+                None => self.run_stack_trigger()
             }
         }
-        // TODO: stack trigger
     }
     fn pop_result(&mut self, err_msg: &str) -> Result<Rc<PdObj>, PdError> {
         self.pop().ok_or(PdError::EmptyStack(err_msg.to_string()))
@@ -131,13 +135,24 @@ impl Environment {
         self.marker_stack.pop()
     }
 
+    fn maximize_length(&mut self) {
+        let mut acc = Vec::new();
+        while let Some(v) = self.run_stack_trigger() {
+            acc.push(v);
+        }
+        acc.reverse();
+        acc.extend(self.stack.drain(..));
+        self.stack = acc;
+    }
+
     fn pop_until_stack_marker(&mut self) -> Vec<Rc<PdObj>> {
         match self.pop_stack_marker() {
             Some(marker) => {
                 self.stack.split_off(marker) // this is way too perfect
             }
             None => {
-                panic!("popping TODO this will do stack trigger stuff");
+                self.maximize_length();
+                self.stack.split_off(0) // meh
             }
         }
     }
@@ -175,6 +190,18 @@ impl Environment {
                     _ => self.variables.get(name)
                 }
             }
+        }
+    }
+
+    pub fn new_with_stdin() -> Environment {
+        Environment {
+            stack: Vec::new(),
+            x_stack: Vec::new(),
+            variables: HashMap::new(),
+            marker_stack: Vec::new(),
+            shadow: None,
+            input_trigger: None,
+            reader: Some(EOFReader::new(Box::new(std::io::BufReader::new(std::io::stdin())))),
         }
     }
 
@@ -784,9 +811,8 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
             lex::Leader::FloatLit(f) => {
                 RcLeader::Lit(Rc::new(PdObj::from(f)))
             }
-            lex::Leader::Block(b) => {
-                // FIXME
-                RcLeader::Lit(Rc::new(PdObj::Block(Rc::new(CodeBlock(vec![], rcify(*b))))))
+            lex::Leader::Block(t, b) => {
+                RcLeader::Lit(Rc::new(PdObj::Block(Rc::new(CodeBlock(t, rcify(b))))))
             }
             lex::Leader::Var(s) => {
                 RcLeader::Var(Rc::new(s))
@@ -874,6 +900,20 @@ fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailer
 
 impl Block for CodeBlock {
     fn run(&self, mut env: &mut Environment) -> PdUnit {
+        for init_trailer in &self.0 {
+            match init_trailer.0.as_ref() {
+                "i" | "_i" | "_input" => { env.input_trigger = Some(InputTrigger::All); }
+                "l" | "_l" | "_line" => { env.input_trigger = Some(InputTrigger::Line); }
+                "w" | "_w" | "_word" => { env.input_trigger = Some(InputTrigger::Word); }
+                "v" | "_v" | "_values" => { env.input_trigger = Some(InputTrigger::Value); }
+                "r" | "_r" | "_record" => { env.input_trigger = Some(InputTrigger::Record); }
+                "a" | "_a" | "_linearray" => { env.input_trigger = Some(InputTrigger::AllLines); }
+                "y" | "_y" | "_valuearray" => { env.input_trigger = Some(InputTrigger::AllValues); }
+                "q" | "_q" | "_recordarray" => { env.input_trigger = Some(InputTrigger::AllRecords); }
+                _ => { panic!("unsupported init trailer"); }
+            }
+        }
+
         for RcToken(leader, trailer) in &self.1 {
             // println!("{:?} {:?}", leader, trailer);
             // TODO: handle trailers lolololol
