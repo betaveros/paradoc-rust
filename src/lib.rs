@@ -669,30 +669,6 @@ impl Block for DeepBinaryOpBlock {
     }
 }
 
-#[derive(Debug)]
-struct EachBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for EachBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        // TODO: literally everything
-        // Extract into sandbox; push x-stack; handle continue/breaks
-        match seq_range(&*env.pop_result("each no stack")?) {
-            Some(vec) => {
-                for obj in vec.iter() {
-                    env.push(Rc::clone(&obj));
-                    self.body.run(env)?;
-                }
-                Ok(())
-            }
-            _ => Err(PdError::BadArgument("each".to_string())),
-        }
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_each"
-    }
-}
-
 // TODO: handle continue/break (have fun!) (this should be fine now)
 // doesn't push and pop yx
 // The inner function returns true to break out of the loop.
@@ -738,24 +714,27 @@ fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body
     Ok(acc)
 }
 
-#[derive(Debug)]
-struct MapBlock {
+struct OneBodyBlock {
+    name: &'static str,
     body: Rc<dyn Block>,
+    f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit,
 }
-impl Block for MapBlock {
+impl Debug for OneBodyBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "OneBodyBlock {{ name: {:?}, body: {:?}, f: ??? }}", self.name, self.body)
+    }
+}
+impl Block for OneBodyBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
-        match seq_range(&*env.pop_result("map no stack")?) {
-            Some(vec) => {
-                let res = pd_map(env, &self.body, vec.iter())?;
-                env.push(Rc::new(PdObj::List(Rc::new(res))));
-                Ok(())
-            }
-            _ => Err(PdError::BadArgument("map coercion".to_string())),
-        }
+        (self.f)(env, &self.body)
     }
     fn code_repr(&self) -> String {
-        self.body.code_repr() + "_map"
+        format!("{}_{}", self.body.code_repr(), self.name)
     }
+}
+fn pop_seq_range_for(env: &mut Environment, name: &'static str) -> PdResult<PdSeq> {
+    let opt_seq = seq_range(&*env.pop_result(format!("{} no stack", name).as_str())?);
+    opt_seq.ok_or(PdError::BadArgument(format!("{} coercion fail", name)))
 }
 
 #[derive(Debug)]
@@ -770,128 +749,6 @@ impl Block for BindBlock {
     }
     fn code_repr(&self) -> String {
         self.body.code_repr() + "_bind"
-    }
-}
-
-#[derive(Debug)]
-struct BindMapBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for BindMapBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        let b = env.pop_result("bindmap nothing to bind")?;
-        let bb: Rc<dyn Block> = Rc::new(BindBlock {
-            body: Rc::clone(&self.body),
-            bound_object: b,
-        });
-
-        match seq_range(&*env.pop_result("bindmap no stack")?) {
-            Some(vec) => {
-                let res = pd_map(env, &bb, vec.iter())?;
-                env.push(Rc::new(PdObj::List(Rc::new(res))));
-                Ok(())
-            }
-            _ => Err(PdError::BadArgument("bindmap coercion".to_string())),
-        }
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_bindmap"
-    }
-}
-
-#[derive(Debug)]
-struct UnderBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for UnderBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        let obj = env.pop_result("under no stack")?;
-        self.body.run(env)?;
-        env.push(obj);
-        Ok(())
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_under"
-    }
-}
-
-#[derive(Debug)]
-struct KeepBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for KeepBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        let res = env.run_on_bracketed_shadow(ShadowType::Keep, |inner| {
-            self.body.run(inner)?;
-            Ok(inner.take_stack())
-        })?;
-        env.extend(res);
-        Ok(())
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_keep"
-    }
-}
-
-#[derive(Debug)]
-struct KeepUnderBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for KeepUnderBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        let (res, arity) = env.run_on_bracketed_shadow_with_arity(ShadowType::Keep, |inner| {
-            self.body.run(inner)?;
-            Ok(inner.take_stack())
-        })?;
-        let temp = env.pop_n_result(arity, "keepunder stack failed")?;
-        env.extend(res);
-        env.extend(temp);
-        Ok(())
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_keepunder"
-    }
-}
-
-#[derive(Debug)]
-struct SumBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for SumBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        match seq_range(&*env.pop_result("sum no stack")?) {
-            Some(seq) => {
-                let res = pd_flat_fold(env, &self.body, PdNum::from(0),
-                    |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
-                env.push(Rc::new(PdObj::Num(res)));
-                Ok(())
-            }
-            _ => Err(PdError::BadArgument("sum coercion".to_string())),
-        }
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_sum"
-    }
-}
-
-#[derive(Debug)]
-struct AllBlock {
-    body: Rc<dyn Block>,
-}
-impl Block for AllBlock {
-    fn run(&self, env: &mut Environment) -> PdUnit {
-        match seq_range(&*env.pop_result("all no stack")?) {
-            Some(seq) => {
-                let res = pd_flat_fold_with_short_circuit(env, &self.body, true,
-                    |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
-                env.push(Rc::new(PdObj::Num(PdNum::Int(bi_iverson(res)))));
-                Ok(())
-            }
-            _ => Err(PdError::BadArgument("all coercion".to_string())),
-        }
-    }
-    fn code_repr(&self) -> String {
-        self.body.code_repr() + "_all"
     }
 }
 
@@ -945,6 +802,10 @@ impl CodeBlock {
     }
 }
 
+fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> Option<(Rc<PdObj>, bool)> {
+    let body: Rc<dyn Block> = Rc::clone(bb);
+    Some((Rc::new(PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
+}
 fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
     match &**obj {
         PdObj::Num(n) => match trailer.0.as_ref() {
@@ -955,38 +816,71 @@ fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, 
             _ => None
         }
         PdObj::Block(bb) => match trailer.0.as_ref() {
-            "e" | "_e" | "_each" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(EachBlock { body }))), false))
-            }
-            "m" | "_m" | "_map" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(MapBlock { body }))), false))
-            }
-            "u" | "_u" | "_under" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(UnderBlock { body }))), false))
-            }
-            "k" | "_k" | "_keep" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(KeepBlock { body }))), false))
-            }
-            "q" | "_q" | "_keepunder" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(KeepUnderBlock { body }))), false))
-            }
-            "š" | "_š" | "_sum" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(SumBlock { body }))), false))
-            }
-            "â" | "_â" | "_all" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(AllBlock { body }))), false))
-            }
-            "v" | "_v" | "_bindmap" | "_vectorize" => {
-                let body: Rc<dyn Block> = Rc::clone(bb);
-                Some((Rc::new(PdObj::Block(Rc::new(BindMapBlock { body }))), false))
-            }
+            "e" | "_e" | "_each" => obb("each", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "each")?;
+                for obj in seq.iter() {
+                    env.push(Rc::clone(&obj));
+                    body.run(env)?;
+                }
+                Ok(())
+            }),
+            "m" | "_m" | "_map" => obb("map", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "map")?;
+                let res = pd_map(env, body, seq.iter())?;
+                env.push(Rc::new(PdObj::List(Rc::new(res))));
+                Ok(())
+            }),
+            "u" | "_u" | "_under" => obb("under", bb, |env, body| {
+                let obj = env.pop_result("under no stack")?;
+                body.run(env)?;
+                env.push(obj);
+                Ok(())
+            }),
+            "k" | "_k" | "_keep" => obb("keep", bb, |env, body| {
+                let res = env.run_on_bracketed_shadow(ShadowType::Keep, |inner| {
+                    body.run(inner)?;
+                    Ok(inner.take_stack())
+                })?;
+                env.extend(res);
+                Ok(())
+            }),
+            "q" | "_q" | "_keepunder" => obb("keepunder", bb, |env, body| {
+                let (res, arity) = env.run_on_bracketed_shadow_with_arity(ShadowType::Keep, |inner| {
+                    body.run(inner)?;
+                    Ok(inner.take_stack())
+                })?;
+                let temp = env.pop_n_result(arity, "keepunder stack failed")?;
+                env.extend(res);
+                env.extend(temp);
+                Ok(())
+            }),
+            "š" | "_š" | "_sum" => obb("sum", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "sum")?;
+                let res = pd_flat_fold(env, body, PdNum::from(0),
+                    |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
+                env.push(Rc::new(PdObj::Num(res)));
+                Ok(())
+            }),
+            "â" | "_â" | "_all" => obb("all", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "all")?;
+                let res = pd_flat_fold_with_short_circuit(env, body, true,
+                    |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
+                env.push(Rc::new(PdObj::Num(PdNum::Int(bi_iverson(res)))));
+                Ok(())
+            }),
+            "v" | "_v" | "_bindmap" | "_vectorize" => obb("all", bb, |env, body| {
+                let b = env.pop_result("bindmap nothing to bind")?;
+                let bb: Rc<dyn Block> = Rc::new(BindBlock {
+                    body: Rc::clone(body),
+                    bound_object: b,
+                });
+
+                let seq = pop_seq_range_for(env, "bindmap")?;
+                let res = pd_map(env, &bb, seq.iter())?;
+                env.push(Rc::new(PdObj::List(Rc::new(res))));
+                Ok(())
+            }),
+
             _ => None
         }
         _ => None
