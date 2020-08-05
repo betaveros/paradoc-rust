@@ -653,7 +653,10 @@ impl Block for EachBlock {
     }
 }
 
-// TODO: handle continue/break (have fun!)
+// TODO: handle continue/break (have fun!) (this should be fine now)
+// Not maximally lazy, but I don't feel like I can justify pulling in another library at this
+// moment... https://docs.rs/crate/resultit/0.1.0/source/src/flatten_results.rs
+// (and we might have to inspect things in the middle anyway)
 fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> Result<Vec<Rc<PdObj>>, PdError> {
     env.push_yx();
     let res = it.enumerate().map(|(i, obj)| {
