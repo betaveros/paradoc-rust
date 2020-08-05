@@ -96,10 +96,10 @@ impl Environment {
         }
         // TODO: stack trigger
     }
-    fn pop_result(&mut self, _err_msg: &'static str) -> Result<Rc<PdObj>, PdError> {
-        self.pop().ok_or(PdError::EmptyStack)
+    fn pop_result(&mut self, err_msg: &str) -> Result<Rc<PdObj>, PdError> {
+        self.pop().ok_or(PdError::EmptyStack(err_msg.to_string()))
     }
-    fn pop_n_result(&mut self, n: usize, err_msg: &'static str) -> Result<Vec<Rc<PdObj>>, PdError> {
+    fn pop_n_result(&mut self, n: usize, err_msg: &str) -> Result<Vec<Rc<PdObj>>, PdError> {
         let mut ret: Vec<Rc<PdObj>> = Vec::new();
         for _ in 0..n {
             ret.push(self.pop_result(err_msg)?);
@@ -250,7 +250,7 @@ pub enum PdObj {
 
 #[derive(Debug)]
 pub enum PdError {
-    EmptyStack,
+    EmptyStack(String),
     UndefinedVariable,
     InapplicableTrailer,
     BadArgument(String),
@@ -571,7 +571,7 @@ impl Block for CasedBuiltIn {
                         accumulated_args.insert(0, arg);
                     }
                     None => {
-                        return Err(PdError::EmptyStack)
+                        return Err(PdError::EmptyStack(format!("built-in {}", self.name)))
                     }
                 }
             }
