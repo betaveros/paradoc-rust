@@ -762,7 +762,7 @@ pub enum RcLeader {
 }
 
 #[derive(Debug)]
-pub struct CodeBlock(Vec<RcToken>);
+pub struct CodeBlock(Vec<lex::Trailer>, Vec<RcToken>);
 
 #[derive(Debug, PartialEq)]
 pub struct RcToken(pub RcLeader, pub Vec<lex::Trailer>);
@@ -785,7 +785,8 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
                 RcLeader::Lit(Rc::new(PdObj::from(f)))
             }
             lex::Leader::Block(b) => {
-                RcLeader::Lit(Rc::new(PdObj::Block(Rc::new(CodeBlock(rcify(*b))))))
+                // FIXME
+                RcLeader::Lit(Rc::new(PdObj::Block(Rc::new(CodeBlock(vec![], rcify(*b))))))
             }
             lex::Leader::Var(s) => {
                 RcLeader::Var(Rc::new(s))
@@ -795,8 +796,14 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
     }).collect()
 }
 
+// fn rc_parse_pair((trailers: Vec<lex::Trailer>, tokens
+
 impl CodeBlock {
-    pub fn parse(code: &str) -> Self { CodeBlock(rcify(lex::parse(code))) }
+    pub fn parse(code: &str) -> Self {
+        let (init_trailers, tokens) = lex::parse(code);
+        let rcs = rcify(tokens);
+        CodeBlock(init_trailers, rcs)
+    }
 }
 
 fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, bool)> {
@@ -867,7 +874,7 @@ fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailer
 
 impl Block for CodeBlock {
     fn run(&self, mut env: &mut Environment) -> PdUnit {
-        for RcToken(leader, trailer) in &self.0 {
+        for RcToken(leader, trailer) in &self.1 {
             // println!("{:?} {:?}", leader, trailer);
             // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {

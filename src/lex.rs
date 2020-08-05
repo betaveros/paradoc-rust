@@ -17,15 +17,21 @@ pub enum Leader {
 #[derive(Debug, PartialEq)]
 pub struct Token(pub Leader, pub Vec<Trailer>);
 
-pub fn lex(code: &str) -> Vec<(&str, &str)> {
+pub fn lex(code: &str) -> (&str, Vec<(&str, &str)>) {
+    // TODO: starting comments and stuff
     lazy_static! {
+        static ref PD_INIT_TRAILER_PATTERN: Regex = Regex::new(r#"^[a-z_]*"#).unwrap();
+
         // group 1, group 2
         static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_])([a-z_]*)"#).unwrap();
     }
 
+    let init_trailer_match = PD_INIT_TRAILER_PATTERN.find(code).expect("kleene star can't fail...");
+    let init_trailer_str = init_trailer_match.as_str();
+
     let mut caps = PD_TOKEN_PATTERN.capture_locations();
 
-    let mut i = 0;
+    let mut i = init_trailer_match.end();
     let mut go = true;
     let mut tokens = Vec::new();
 
@@ -49,7 +55,9 @@ pub fn lex(code: &str) -> Vec<(&str, &str)> {
     }
     assert!(i == code.len(), "didn't finish lexing!");
 
-    tokens
+    println!("{:?}", tokens);
+
+    (init_trailer_str, tokens)
 }
 
 pub fn parse_string_leader(s: &str) -> String {
@@ -155,9 +163,9 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
     (ret, cur)
 }
 
-pub fn parse(code: &str) -> Vec<Token> {
-    let lexed = lex(code);
+pub fn parse(code: &str) -> (Vec<Trailer>, Vec<Token>) {
+    let (init_trailer, lexed) = lex(code);
     let (toks, end) = parse_at(&lexed, 0);
     assert!(end == lexed.len(), "didn't finish parsing");
-    toks
+    (parse_trailer(init_trailer), toks)
 }

@@ -1,5 +1,6 @@
 use std::io;
-use std::io::Write;
+use std::fs::File;
+use std::io::{Read, Write};
 use paradoc::Block;
 
 fn prompt(input: &mut String) -> bool {
@@ -14,7 +15,7 @@ fn prompt(input: &mut String) -> bool {
     }
 }
 
-fn main() {
+fn repl() {
     let mut env = paradoc::Environment::new();
     paradoc::initialize(&mut env);
 
@@ -28,5 +29,37 @@ fn main() {
         }
 
         println!("{}", env.stack_to_repr_string());
+    }
+}
+
+fn main() {
+    match std::env::args().collect::<Vec<String>>().as_slice() {
+        [] | [_] => { repl(); }
+        [_, s] => {
+            match File::open(s) {
+                Ok(mut file) => {
+                    let mut code = String::new();
+                    file.read_to_string(&mut code).expect("reading code file failed");
+
+                    let block = paradoc::CodeBlock::parse(&code);
+
+                    // println!("{:?}", block);
+
+                    let mut env = paradoc::Environment::new();
+                    paradoc::initialize(&mut env);
+
+                    match block.run(&mut env) {
+                        Ok(()) => {},
+                        Err(e) => { println!("ERROR: {:?}", e); }
+                    }
+
+                    println!("{}", env.stack_to_string());
+                }
+                Err(_) => {
+                    panic!("opening code file failed");
+                }
+            }
+        }
+        _ => { panic!("too many arguments"); }
     }
 }
