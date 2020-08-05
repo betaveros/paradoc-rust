@@ -23,7 +23,7 @@ pub fn lex(code: &str) -> (&str, Vec<(&str, &str)>) {
         static ref PD_INIT_TRAILER_PATTERN: Regex = Regex::new(r#"^[a-z_]*"#).unwrap();
 
         // group 1, group 2
-        static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_])([a-z_]*)"#).unwrap();
+        static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_])([a-z_š]*)"#).unwrap();
     }
 
     let init_trailer_match = PD_INIT_TRAILER_PATTERN.find(code).expect("kleene star can't fail...");

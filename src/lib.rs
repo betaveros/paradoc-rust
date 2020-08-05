@@ -694,18 +694,48 @@ impl Block for EachBlock {
 }
 
 // TODO: handle continue/break (have fun!) (this should be fine now)
-// Not maximally lazy, but I don't feel like I can justify pulling in another library at this
-// moment... https://docs.rs/crate/resultit/0.1.0/source/src/flatten_results.rs
-// (and we might have to inspect things in the middle anyway)
-fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> Result<Vec<Rc<PdObj>>, PdError> {
-    env.push_yx();
-    let res = it.enumerate().map(|(i, obj)| {
+// doesn't push and pop yx
+// The inner function returns true to break out of the loop.
+fn pd_flatmap_foreach_core<F>(env: &mut Environment, func: &Rc<dyn Block>, mut body: F, it: PdIter) -> PdUnit where F: FnMut(Rc<PdObj>) -> PdResult<bool> {
+    let mut broken: bool = false;
+    for (i, obj) in it.enumerate() {
         env.set_yx(Rc::new(PdObj::from(i)), Rc::clone(&obj));
-        sandbox(env, &func, vec![obj])
-    }).collect::<Result<Vec<Vec<Rc<PdObj>>>, PdError>>()?;
-    let out = res.concat();
+        for e in sandbox(env, &func, vec![obj])? {
+            if body(e)? { broken = true; break; }
+        }
+        if broken { break; }
+    }
+    Ok(())
+}
+
+fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, body: F, it: PdIter) -> PdUnit where F: FnMut(Rc<PdObj>) -> PdResult<bool> {
+    env.push_yx();
+    let core = pd_flatmap_foreach_core(env, func, body, it);
     env.pop_yx();
-    Ok(out)
+    core
+}
+
+fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<Rc<PdObj>>> {
+    let mut acc = Vec::new();
+    pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(false) }, it)?;
+    Ok(acc)
+}
+
+// TODO: I don't think F should need to borrow &B, but it's tricky.
+fn pd_flat_fold_with_short_circuit<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, Rc<PdObj>) -> PdResult<(bool, B)> {
+    let mut acc = init;
+    pd_flatmap_foreach(env, func, |o| {
+        let (do_break, acc2) = body(&acc, o)?;
+        acc = acc2;
+        Ok(do_break)
+    }, it)?;
+    Ok(acc)
+}
+
+fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, Rc<PdObj>) -> PdResult<B> {
+    let mut acc = init;
+    pd_flatmap_foreach(env, func, |o| { acc = body(&acc, o)?; Ok(false) }, it)?;
+    Ok(acc)
 }
 
 #[derive(Debug)]
@@ -725,6 +755,47 @@ impl Block for MapBlock {
     }
     fn code_repr(&self) -> String {
         self.body.code_repr() + "_map"
+    }
+}
+
+#[derive(Debug)]
+struct BindBlock {
+    body: Rc<dyn Block>,
+    bound_object: Rc<PdObj>,
+}
+impl Block for BindBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        env.push(Rc::clone(&self.bound_object));
+        self.body.run(env)
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_bind"
+    }
+}
+
+#[derive(Debug)]
+struct BindMapBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for BindMapBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let b = env.pop_result("bindmap nothing to bind")?;
+        let bb: Rc<dyn Block> = Rc::new(BindBlock {
+            body: Rc::clone(&self.body),
+            bound_object: b,
+        });
+
+        match seq_range(&*env.pop_result("bindmap no stack")?) {
+            Some(vec) => {
+                let res = pd_map(env, &bb, vec.iter())?;
+                env.push(Rc::new(PdObj::List(Rc::new(res))));
+                Ok(())
+            }
+            _ => Err(PdError::BadArgument("bindmap coercion".to_string())),
+        }
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_bindmap"
     }
 }
 
@@ -779,6 +850,48 @@ impl Block for KeepUnderBlock {
     }
     fn code_repr(&self) -> String {
         self.body.code_repr() + "_keepunder"
+    }
+}
+
+#[derive(Debug)]
+struct SumBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for SumBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        match seq_range(&*env.pop_result("sum no stack")?) {
+            Some(seq) => {
+                let res = pd_flat_fold(env, &self.body, PdNum::from(0),
+                    |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
+                env.push(Rc::new(PdObj::Num(res)));
+                Ok(())
+            }
+            _ => Err(PdError::BadArgument("sum coercion".to_string())),
+        }
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_sum"
+    }
+}
+
+#[derive(Debug)]
+struct AllBlock {
+    body: Rc<dyn Block>,
+}
+impl Block for AllBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        match seq_range(&*env.pop_result("all no stack")?) {
+            Some(seq) => {
+                let res = pd_flat_fold_with_short_circuit(env, &self.body, true,
+                    |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
+                env.push(Rc::new(PdObj::Num(PdNum::Int(bi_iverson(res)))));
+                Ok(())
+            }
+            _ => Err(PdError::BadArgument("all coercion".to_string())),
+        }
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_all"
     }
 }
 
@@ -862,6 +975,18 @@ fn apply_trailer(obj: &Rc<PdObj>, trailer: &lex::Trailer) -> Option<(Rc<PdObj>, 
                 let body: Rc<dyn Block> = Rc::clone(bb);
                 Some((Rc::new(PdObj::Block(Rc::new(KeepUnderBlock { body }))), false))
             }
+            "š" | "_š" | "_sum" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::Block(Rc::new(SumBlock { body }))), false))
+            }
+            "â" | "_â" | "_all" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::Block(Rc::new(AllBlock { body }))), false))
+            }
+            "v" | "_v" | "_bindmap" | "_vectorize" => {
+                let body: Rc<dyn Block> = Rc::clone(bb);
+                Some((Rc::new(PdObj::Block(Rc::new(BindMapBlock { body }))), false))
+            }
             _ => None
         }
         _ => None
@@ -919,11 +1044,11 @@ impl Block for CodeBlock {
             // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    apply_all_trailers(Rc::clone(obj), true, trailer).ok_or(PdError::InapplicableTrailer)?
+                    apply_all_trailers(Rc::clone(obj), true, trailer).ok_or(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))?
                 }
                 RcLeader::Var(s) => {
-                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable)?;
-                    apply_all_trailers(Rc::clone(obj), false, rest).ok_or(PdError::InapplicableTrailer)?
+                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(String::clone(s)))?;
+                    apply_all_trailers(Rc::clone(obj), false, rest).ok_or(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))?
                 }
             };
 

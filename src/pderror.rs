@@ -1,8 +1,8 @@
 #[derive(Debug)]
 pub enum PdError {
     EmptyStack(String),
-    UndefinedVariable,
-    InapplicableTrailer,
+    UndefinedVariable(String),
+    InapplicableTrailer(String),
     BadArgument(String),
     BadList(&'static str),
     NumericError(&'static str),
