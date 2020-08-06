@@ -837,24 +837,27 @@ fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn B
     let body: Rc<dyn Block> = Rc::clone(bb);
     Ok((Rc::new(PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
 }
-fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Trailer) -> PdResult<(Rc<PdObj>, bool)> {
+fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::Trailer) -> PdResult<(Rc<PdObj>, bool)> {
+    let mut trailer: &str = trailer0.0.as_ref();
+    trailer = trailer.strip_prefix('_').unwrap_or(trailer);
+
     match &**obj {
-        PdObj::Num(n) => match trailer.0.as_ref() {
-            "p" | "_p" | "_power" => {
+        PdObj::Num(n) => match trailer {
+            "p" | "power" => {
                 let exponent: PdNum = PdNum::clone(n);
                 Ok((Rc::new(PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
             }
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
-        PdObj::Block(bb) => match trailer.0.as_ref() {
-            "b" | "_b" | "_bind" => {
+        PdObj::Block(bb) => match trailer {
+            "b" | "bind" => {
                 let b = outer_env.pop_result("bind nothing to bind")?;
                 Ok((Rc::new(PdObj::Block(Rc::new(BindBlock {
                     body: Rc::clone(bb),
                     bound_object: b,
                 }))), true))
             }
-            "e" | "_e" | "_each" => obb("each", bb, |env, body| {
+            "e" | "each" => obb("each", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "each")?;
                 for obj in seq.iter() {
                     env.push(Rc::clone(&obj));
@@ -862,19 +865,19 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Tr
                 }
                 Ok(())
             }),
-            "m" | "_m" | "_map" => obb("map", bb, |env, body| {
+            "m" | "map" => obb("map", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "map")?;
                 let res = pd_map(env, body, seq.iter())?;
                 env.push(pd_list(res));
                 Ok(())
             }),
-            "u" | "_u" | "_under" => obb("under", bb, |env, body| {
+            "u" | "under" => obb("under", bb, |env, body| {
                 let obj = env.pop_result("under no stack")?;
                 body.run(env)?;
                 env.push(obj);
                 Ok(())
             }),
-            "k" | "_k" | "_keep" => obb("keep", bb, |env, body| {
+            "k" | "keep" => obb("keep", bb, |env, body| {
                 let res = env.run_on_bracketed_shadow(ShadowType::Keep, |inner| {
                     body.run(inner)?;
                     Ok(inner.take_stack())
@@ -882,7 +885,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Tr
                 env.extend(res);
                 Ok(())
             }),
-            "q" | "_q" | "_keepunder" => obb("keepunder", bb, |env, body| {
+            "q" | "keepunder" => obb("keepunder", bb, |env, body| {
                 let (res, arity) = env.run_on_bracketed_shadow_with_arity(ShadowType::Keep, |inner| {
                     body.run(inner)?;
                     Ok(inner.take_stack())
@@ -892,21 +895,21 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Tr
                 env.extend(temp);
                 Ok(())
             }),
-            "š" | "_š" | "_sum" => obb("sum", bb, |env, body| {
+            "š" | "sum" => obb("sum", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "sum")?;
                 let res = pd_flat_fold(env, body, PdNum::from(0),
                     |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
                 env.push(Rc::new(PdObj::from(res)));
                 Ok(())
             }),
-            "â" | "_â" | "_all" => obb("all", bb, |env, body| {
+            "â" | "all" => obb("all", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "all")?;
                 let res = pd_flat_fold_with_short_circuit(env, body, true,
                     |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
                 env.push(Rc::new(PdObj::from(bi_iverson(res))));
                 Ok(())
             }),
-            "v" | "_v" | "_bindmap" | "_vectorize" => obb("all", bb, |env, body| {
+            "v" | "bindmap" | "vectorize" => obb("all", bb, |env, body| {
                 let b = env.pop_result("bindmap nothing to bind")?;
                 let bb: Rc<dyn Block> = Rc::new(BindBlock {
                     body: Rc::clone(body),
