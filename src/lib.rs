@@ -973,7 +973,6 @@ impl Block for CodeBlock {
 
         for RcToken(leader, trailer) in &self.1 {
             // println!("{:?} {:?}", leader, trailer);
-            // TODO: handle trailers lolololol
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
                     apply_all_trailers(env, Rc::clone(obj), true, trailer)?
