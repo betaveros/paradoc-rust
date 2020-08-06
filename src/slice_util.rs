@@ -30,7 +30,7 @@ pub fn split_slice_by<'a, 'b, T>(seq: &'a[T], tok: &'b[T]) -> Vec<&'a[T]> where 
     let mut ret = Vec::new();
     loop {
         if i + toklen > seqlen {
-            ret.push(&seq[i..]);
+            ret.push(&seq[cur_start..]);
             break ret
         } else if &seq[i..i+toklen] == tok {
             ret.push(&seq[cur_start..i]);
