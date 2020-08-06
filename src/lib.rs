@@ -271,7 +271,7 @@ impl Environment {
 
         let shadow = benv.shadow.expect("Bracketed shadow disappeared!?!?");
         let arity = shadow.arity;
-        mem::replace(self, *(shadow.env));
+        *self = *(shadow.env);
 
         Ok((ret, arity))
     }
