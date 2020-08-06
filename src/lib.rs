@@ -23,9 +23,9 @@ use crate::input::{InputTrigger, ReadValue, EOFReader};
 
 #[derive(Debug)]
 pub struct Environment {
-    stack: Vec<Rc<PdObj>>,
-    x_stack: Vec<Rc<PdObj>>,
-    variables: HashMap<String, Rc<PdObj>>,
+    stack: Vec<PdObj>,
+    x_stack: Vec<PdObj>,
+    variables: HashMap<String, PdObj>,
     marker_stack: Vec<usize>,
     // hmmm...
     shadow: Option<ShadowState>,
@@ -47,7 +47,7 @@ pub struct ShadowState {
 }
 
 impl ShadowState {
-    fn pop(&mut self) -> Option<Rc<PdObj>> {
+    fn pop(&mut self) -> Option<PdObj> {
         match self.shadow_type {
             ShadowType::Normal => {
                 let res = self.env.pop();
@@ -57,43 +57,43 @@ impl ShadowState {
             ShadowType::Keep => {
                 let res = self.env.stack.get(self.env.stack.len() - 1 - self.arity);
                 if res.is_some() { self.arity += 1; }
-                res.map(Rc::clone)
+                res.map(PdObj::clone)
             }
         }
     }
 }
 
 impl Environment {
-    fn push(&mut self, obj: Rc<PdObj>) {
+    fn push(&mut self, obj: PdObj) {
         self.stack.push(obj)
     }
     // idk what the idiomatic way is yet
-    // fn extend(&mut self, objs: Vec<Rc<PdObj>>) {
+    // fn extend(&mut self, objs: Vec<PdObj>) {
     //     for obj in objs {
     //         self.push(obj)
     //     }
     // }
-    fn extend(&mut self, objs: Vec<Rc<PdObj>>) {
+    fn extend(&mut self, objs: Vec<PdObj>) {
         for obj in objs {
             self.push(obj)
         }
     }
-    fn extend_clone(&mut self, objs: &Vec<Rc<PdObj>>) {
+    fn extend_clone(&mut self, objs: &[PdObj]) {
         for obj in objs {
-            self.push(Rc::clone(obj))
+            self.push(PdObj::clone(obj))
         }
     }
 
-    fn run_stack_trigger(&mut self) -> Option<Rc<PdObj>> {
+    fn run_stack_trigger(&mut self) -> Option<PdObj> {
         match (&mut self.reader, self.input_trigger) {
             (Some(r), Some(t)) => {
-                r.read(t).expect("io error in input trigger").map(|v| Rc::new(PdObj::from(v)))
+                r.read(t).expect("io error in input trigger").map(|v| (PdObj::from(v)))
             }
             _ => None
         }
     }
 
-    fn pop(&mut self) -> Option<Rc<PdObj>> {
+    fn pop(&mut self) -> Option<PdObj> {
         let len = self.stack.len();
         let ret = self.stack.pop();
         match ret {
@@ -113,11 +113,11 @@ impl Environment {
             }
         }
     }
-    fn pop_result(&mut self, err_msg: &str) -> PdResult<Rc<PdObj>> {
+    fn pop_result(&mut self, err_msg: &str) -> PdResult<PdObj> {
         self.pop().ok_or(PdError::EmptyStack(err_msg.to_string()))
     }
-    fn pop_n_result(&mut self, n: usize, err_msg: &str) -> Result<Vec<Rc<PdObj>>, PdError> {
-        let mut ret: Vec<Rc<PdObj>> = Vec::new();
+    fn pop_n_result(&mut self, n: usize, err_msg: &str) -> Result<Vec<PdObj>, PdError> {
+        let mut ret: Vec<PdObj> = Vec::new();
         for _ in 0..n {
             ret.push(self.pop_result(err_msg)?);
         }
@@ -125,13 +125,13 @@ impl Environment {
         Ok(ret)
     }
 
-    fn peek_result(&mut self, err_msg: &str) -> PdResult<Rc<PdObj>> {
+    fn peek_result(&mut self, err_msg: &str) -> PdResult<PdObj> {
         let ret = self.pop_result(err_msg)?;
-        self.push(Rc::clone(&ret));
+        self.push(PdObj::clone(&ret));
         Ok(ret)
     }
 
-    fn take_stack(&mut self) -> Vec<Rc<PdObj>> {
+    fn take_stack(&mut self) -> Vec<PdObj> {
         mem::take(&mut self.stack)
     }
 
@@ -153,7 +153,7 @@ impl Environment {
         self.stack = acc;
     }
 
-    fn pop_until_stack_marker(&mut self) -> Vec<Rc<PdObj>> {
+    fn pop_until_stack_marker(&mut self) -> Vec<PdObj> {
         match self.pop_stack_marker() {
             Some(marker) => {
                 self.stack.split_off(marker) // this is way too perfect
@@ -165,15 +165,15 @@ impl Environment {
         }
     }
 
-    fn push_x(&mut self, obj: Rc<PdObj>) {
+    fn push_x(&mut self, obj: PdObj) {
         self.x_stack.push(obj)
     }
 
     fn push_yx(&mut self) {
-        self.push_x(Rc::new(PdObj::from("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
-        self.push_x(Rc::new(PdObj::from("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string())));
+        self.push_x(PdObj::from("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+        self.push_x(PdObj::from("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
     }
-    fn set_yx(&mut self, y: Rc<PdObj>, x: Rc<PdObj>) {
+    fn set_yx(&mut self, y: PdObj, x: PdObj) {
         let len = self.x_stack.len();
         self.x_stack[len - 2] = y;
         self.x_stack[len - 1] = x;
@@ -184,10 +184,10 @@ impl Environment {
     }
 
     fn short_insert(&mut self, name: &str, obj: PdObj) {
-        self.variables.insert(name.to_string(), Rc::new(obj));
+        self.variables.insert(name.to_string(), obj);
     }
 
-    fn get(&self, name: &str) -> Option<&Rc<PdObj>> {
+    fn get(&self, name: &str) -> Option<&PdObj> {
         match &self.shadow {
             Some(inner) => inner.env.get(name),
             None => {
@@ -225,8 +225,8 @@ impl Environment {
         }
     }
 
-    fn to_string(&self, obj: &Rc<PdObj>) -> String {
-        match &**obj {
+    fn to_string(&self, obj: &PdObj) -> String {
+        match obj {
             PdObj::Num(n) => n.to_string(),
             PdObj::String(s) => s.iter().collect::<String>(),
             PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
@@ -234,8 +234,8 @@ impl Environment {
         }
     }
 
-    fn to_repr_string(&self, obj: &Rc<PdObj>) -> String {
-        match &**obj {
+    fn to_repr_string(&self, obj: &PdObj) -> String {
+        match obj {
             PdObj::Num(n) => n.to_string(),
             PdObj::String(s) => format!("\"{}\"", &s.iter().collect::<String>()),
             PdObj::List(v) => format!("[{}]", v.iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")),
@@ -283,18 +283,18 @@ pub trait Block : Debug {
     fn code_repr(&self) -> String;
 }
 
-fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) -> Result<Vec<Rc<PdObj>>, PdError> {
+fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> Result<Vec<PdObj>, PdError> {
     env.run_on_bracketed_shadow(ShadowType::Normal, |inner| {
         inner.extend(args);
         func.run(inner)?;
         Ok(inner.take_stack())
     })
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PdObj {
     Num(Rc<PdNum>),
     String(Rc<Vec<char>>),
-    List(Rc<Vec<Rc<PdObj>>>),
+    List(Rc<Vec<PdObj>>),
     Block(Rc<dyn Block>),
 }
 
@@ -362,7 +362,7 @@ impl From<ReadValue> for PdObj {
             ReadValue::Char(c) => PdObj::from(c),
             ReadValue::Int(n) => PdObj::from(n),
             ReadValue::Float(f) => PdObj::from(f),
-            ReadValue::List(v) => PdObj::List(Rc::new(v.into_iter().map(|x| Rc::new(PdObj::from(x))).collect())),
+            ReadValue::List(v) => PdObj::List(Rc::new(v.into_iter().map(|x| (PdObj::from(x))).collect())),
         }
     }
 }
@@ -389,35 +389,35 @@ impl Block for BuiltIn {
 // Yeah, so we do want to take args because of interactions with shadow stacks
 trait Case {
     fn arity(&self) -> usize;
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>>;
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>>;
 }
 
 struct UnaryAnyCase {
-    func: fn(&mut Environment, &Rc<PdObj>) -> PdResult<Vec<Rc<PdObj>>>,
+    func: fn(&mut Environment, &PdObj) -> PdResult<Vec<PdObj>>,
 }
 impl Case for UnaryAnyCase {
     fn arity(&self) -> usize { 1 }
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
         Ok(Some((self.func)(env, &args[0])?))
     }
 }
 
 struct BinaryAnyCase {
-    func: fn(&mut Environment, &Rc<PdObj>, &Rc<PdObj>) -> PdResult<Vec<Rc<PdObj>>>,
+    func: fn(&mut Environment, &PdObj, &PdObj) -> PdResult<Vec<PdObj>>,
 }
 impl Case for BinaryAnyCase {
     fn arity(&self) -> usize { 2 }
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
         Ok(Some((self.func)(env, &args[0], &args[1])?))
     }
 }
 
 struct TernaryAnyCase {
-    func: fn(&mut Environment, &Rc<PdObj>, &Rc<PdObj>, &Rc<PdObj>) -> PdResult<Vec<Rc<PdObj>>>,
+    func: fn(&mut Environment, &PdObj, &PdObj, &PdObj) -> PdResult<Vec<PdObj>>,
 }
 impl Case for TernaryAnyCase {
     fn arity(&self) -> usize { 3 }
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
         Ok(Some((self.func)(env, &args[0], &args[1], &args[2])?))
     }
 }
@@ -450,7 +450,7 @@ fn just_string(obj: &PdObj) -> Option<Rc<Vec<char>>> {
 }
 
 pub enum PdSeq {
-    List(Rc<Vec<Rc<PdObj>>>),
+    List(Rc<Vec<PdObj>>),
     String(Rc<Vec<char>>),
     Range(BigInt, BigInt),
 }
@@ -480,34 +480,34 @@ impl PdSeq {
         }
     }
 
-    fn to_rc_pd_obj(self) -> Rc<PdObj> {
+    fn to_rc_pd_obj(self) -> PdObj {
         match self {
-            PdSeq::List(rc) => Rc::new(PdObj::List(rc)),
-            PdSeq::String(s) => Rc::new(PdObj::String(s)),
-            PdSeq::Range(_, _) => Rc::new(PdObj::List(Rc::new(self.to_new_vec()))),
-            // PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| Rc::new(PdObj::from(x))).collect(),
+            PdSeq::List(rc) => (PdObj::List(rc)),
+            PdSeq::String(s) => (PdObj::String(s)),
+            PdSeq::Range(_, _) => (PdObj::List(Rc::new(self.to_new_vec()))),
+            // PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| (PdObj::from(x))).collect(),
         }
     }
 }
 
 pub enum PdSeqElement {
-    ListElement(Rc<PdObj>),
+    ListElement(PdObj),
     Char(char),
     Int(BigInt),
 }
 
 impl PdSeqElement {
-    fn to_rc_pd_obj(self) -> Rc<PdObj> {
+    fn to_rc_pd_obj(self) -> PdObj {
         match self {
             PdSeqElement::ListElement(rc) => rc,
-            PdSeqElement::Char(c) => Rc::new(PdObj::from(c)),
-            PdSeqElement::Int(n) => Rc::new(PdObj::from(n)),
+            PdSeqElement::Char(c) => (PdObj::from(c)),
+            PdSeqElement::Int(n) => (PdObj::from(n)),
         }
     }
 }
 
 pub enum PdIter<'a> {
-    List(Iter<'a, Rc<PdObj>>),
+    List(Iter<'a, PdObj>),
     String(Iter<'a, char>), // String(std::str::Chars<'a>),
     Range(num_iter::Range<BigInt>),
 }
@@ -531,7 +531,7 @@ impl PdSeq {
 
     fn index(&self, i: usize) -> Option<PdSeqElement> {
         match self {
-            PdSeq::List(v) => v.get(i).map(|e| PdSeqElement::ListElement(Rc::clone(e))),
+            PdSeq::List(v) => v.get(i).map(|e| PdSeqElement::ListElement(PdObj::clone(e))),
             PdSeq::String(s) => s.get(i).map(|e| PdSeqElement::Char(*e)),
             PdSeq::Range(a, b) => {
                 let guess = a + i;
@@ -602,75 +602,75 @@ impl PdSeq {
     // TODO: expensive idk scary
     // it's probably fine but want to make sure it's necessary and I don't accidentally compose it
     // with additional clones
-    fn to_new_vec(&self) -> Vec<Rc<PdObj>> {
+    fn to_new_vec(&self) -> Vec<PdObj> {
         match self {
             PdSeq::List(v) => (&**v).clone(),
-            PdSeq::String(s) => s.iter().map(|x| Rc::new(PdObj::from(*x))).collect(),
-            PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| Rc::new(PdObj::from(x))).collect(),
+            PdSeq::String(s) => s.iter().map(|x| (PdObj::from(*x))).collect(),
+            PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| (PdObj::from(x))).collect(),
         }
     }
 
     fn first(&self) -> Option<PdSeqElement> {
         match self {
-            PdSeq::List(v) => Some(PdSeqElement::ListElement(Rc::clone(v.first()?))),
+            PdSeq::List(v) => Some(PdSeqElement::ListElement(PdObj::clone(v.first()?))),
             PdSeq::String(s) => Some(PdSeqElement::Char(*s.first()?)),
             PdSeq::Range(a, b) => if a < b { Some(PdSeqElement::Int(BigInt::clone(a))) } else { None },
         }
     }
 
-    fn split_first(&self) -> Option<(Rc<PdObj>, Rc<PdObj>)> {
+    fn split_first(&self) -> Option<(PdObj, PdObj)> {
         match self {
             PdSeq::List(v) => {
                 let (x, xs) = v.split_first()?;
-                Some((Rc::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), pd_list(xs.to_vec())))
             }
             PdSeq::String(s) => {
                 let (x, xs) = s.split_first()?;
-                Some((Rc::new(PdObj::from(*x)), Rc::new(PdObj::String(Rc::new(xs.to_vec())))))
+                Some(((PdObj::from(*x)), (PdObj::String(Rc::new(xs.to_vec())))))
             }
             PdSeq::Range(_, _) => {
                 let v = self.to_new_vec();
                 let (x, xs) = v.split_first()?;
-                Some((Rc::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), pd_list(xs.to_vec())))
             }
         }
     }
 
     fn last(&self) -> Option<PdSeqElement> {
         match self {
-            PdSeq::List(v) => Some(PdSeqElement::ListElement(Rc::clone(v.last()?))),
+            PdSeq::List(v) => Some(PdSeqElement::ListElement(PdObj::clone(v.last()?))),
             PdSeq::String(s) => Some(PdSeqElement::Char(*s.last()?)),
             PdSeq::Range(a, b) => if a < b { Some(PdSeqElement::Int(b - 1)) } else { None },
         }
     }
 
-    fn split_last(&self) -> Option<(Rc<PdObj>, Rc<PdObj>)> {
+    fn split_last(&self) -> Option<(PdObj, PdObj)> {
         match self {
             PdSeq::List(v) => {
                 let (x, xs) = v.split_last()?;
-                Some((Rc::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), pd_list(xs.to_vec())))
             }
             PdSeq::String(s) => {
                 let (x, xs) = s.split_last()?;
-                Some((Rc::new(PdObj::from(*x)), Rc::new(PdObj::String(Rc::new(xs.to_vec())))))
+                Some((PdObj::from(*x), (PdObj::String(Rc::new(xs.to_vec())))))
             }
             PdSeq::Range(_, _) => {
                 let v = self.to_new_vec();
                 let (x, xs) = v.split_last()?;
-                Some((Rc::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), pd_list(xs.to_vec())))
             }
         }
     }
 }
 
 impl Iterator for PdIter<'_> {
-    type Item = Rc<PdObj>;
+    type Item = PdObj;
 
-    fn next(&mut self) -> Option<Rc<PdObj>> {
+    fn next(&mut self) -> Option<PdObj> {
         match self {
-            PdIter::List(it) => it.next().map(Rc::clone),
-            PdIter::String(cs) => cs.next().map(|x| Rc::new(PdObj::from(*x))),
-            PdIter::Range(rs) => rs.next().map(|x| Rc::new(PdObj::from(x))),
+            PdIter::List(it) => it.next().map(PdObj::clone),
+            PdIter::String(cs) => cs.next().map(|x| (PdObj::from(*x))),
+            PdIter::Range(rs) => rs.next().map(|x| (PdObj::from(x))),
         }
     }
 }
@@ -682,11 +682,11 @@ fn just_seq(obj: &PdObj) -> Option<PdSeq> {
         _ => None,
     }
 }
-// TODO: hrmm do we want to make this take Rc<PdObj>
+// TODO: hrmm do we want to make this take PdObj
 // honestly we should just get rid of that extra Rc, it's pretty wasteful
-fn list_singleton(obj: &PdObj) -> Option<Rc<Vec<Rc<PdObj>>>> {
+fn list_singleton(obj: &PdObj) -> Option<Rc<Vec<PdObj>>> {
     match obj {
-        PdObj::Num(n) => Some(Rc::new(vec![Rc::new(PdObj::from(PdNum::clone(&**n)))])),
+        PdObj::Num(n) => Some(Rc::new(vec![(PdObj::from(PdNum::clone(&**n)))])),
         PdObj::List(x) => Some(Rc::clone(x)),
         _ => None,
     }
@@ -708,12 +708,12 @@ fn just_block(obj: &PdObj) -> Option<Rc<dyn Block>> {
 }
 
 struct UnaryNumCase {
-    func: fn(&mut Environment, &PdNum) -> PdResult<Vec<Rc<PdObj>>>,
+    func: fn(&mut Environment, &PdNum) -> PdResult<Vec<PdObj>>,
 }
 impl Case for UnaryNumCase {
     fn arity(&self) -> usize { 1 }
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
-        match &*args[0] {
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
+        match &args[0] {
             PdObj::Num(ai) => {
                 let ai2 = Rc::clone(ai);
                 Ok(Some((self.func)(env, &*ai2)?))
@@ -725,12 +725,12 @@ impl Case for UnaryNumCase {
 
 struct UnaryCase<T> {
     coerce: fn(&PdObj) -> Option<T>,
-    func: fn(&mut Environment, &T) -> PdResult<Vec<Rc<PdObj>>>,
+    func: fn(&mut Environment, &T) -> PdResult<Vec<PdObj>>,
 }
 impl<T> Case for UnaryCase<T> {
     fn arity(&self) -> usize { 1 }
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
-        match (self.coerce)(&*args[0]) {
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
+        match (self.coerce)(&args[0]) {
             Some(a) => {
                 Ok(Some((self.func)(env, &a)?))
             }
@@ -738,19 +738,19 @@ impl<T> Case for UnaryCase<T> {
         }
     }
 }
-fn unary_num_case(func: fn(&mut Environment, &Rc<PdNum>) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+fn unary_num_case(func: fn(&mut Environment, &Rc<PdNum>) -> PdResult<Vec<PdObj>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: just_num, func })
 }
 
 struct BinaryCase<T1, T2> {
     coerce1: fn(&PdObj) -> Option<T1>,
     coerce2: fn(&PdObj) -> Option<T2>,
-    func: fn(&mut Environment, &T1, &T2) -> PdResult<Vec<Rc<PdObj>>>,
+    func: fn(&mut Environment, &T1, &T2) -> PdResult<Vec<PdObj>>,
 }
 impl<T1, T2> Case for BinaryCase<T1, T2> {
     fn arity(&self) -> usize { 2 }
-    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
-        match ((self.coerce1)(&*args[0]), (self.coerce2)(&*args[1])) {
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
+        match ((self.coerce1)(&args[0]), (self.coerce2)(&args[1])) {
             (Some(a), Some(b)) => {
                 Ok(Some((self.func)(env, &a, &b)?))
             }
@@ -758,13 +758,13 @@ impl<T1, T2> Case for BinaryCase<T1, T2> {
         }
     }
 }
-fn binary_num_case(func: fn(&mut Environment, &Rc<PdNum>, &Rc<PdNum>) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+fn binary_num_case(func: fn(&mut Environment, &Rc<PdNum>, &Rc<PdNum>) -> PdResult<Vec<PdObj>>) -> Rc<dyn Case> {
     Rc::new(BinaryCase { coerce1: just_num, coerce2: just_num, func })
 }
-fn unary_seq_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+fn unary_seq_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<PdObj>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: just_seq, func })
 }
-fn unary_seq_range_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+fn unary_seq_range_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<PdObj>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: seq_range, func })
 }
 struct CasedBuiltIn {
@@ -780,7 +780,7 @@ impl Debug for CasedBuiltIn {
 impl Block for CasedBuiltIn {
     fn run(&self, env: &mut Environment) -> PdUnit {
         let mut done = false;
-        let mut accumulated_args: Vec<Rc<PdObj>> = Vec::new();
+        let mut accumulated_args: Vec<PdObj> = Vec::new();
         for case in &self.cases {
             while accumulated_args.len() < case.arity() {
                 match env.pop() {
@@ -837,8 +837,8 @@ impl Debug for DeepBinaryOpBlock {
 }
 impl Block for DeepBinaryOpBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
-        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &*env.pop_result("deep binary op no stack")?);
-        env.push(Rc::new(res));
+        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &env.pop_result("deep binary op no stack")?);
+        env.push(res);
         Ok(())
     }
     fn code_repr(&self) -> String {
@@ -849,10 +849,10 @@ impl Block for DeepBinaryOpBlock {
 // TODO: handle continue/break (have fun!) (this should be fine now)
 // doesn't push and pop yx
 // The inner function returns true to break out of the loop.
-fn pd_flatmap_foreach_core<F>(env: &mut Environment, func: &Rc<dyn Block>, mut body: F, it: PdIter) -> PdUnit where F: FnMut(Rc<PdObj>) -> PdResult<bool> {
+fn pd_flatmap_foreach_core<F>(env: &mut Environment, func: &Rc<dyn Block>, mut body: F, it: PdIter) -> PdUnit where F: FnMut(PdObj) -> PdResult<bool> {
     let mut broken: bool = false;
     for (i, obj) in it.enumerate() {
-        env.set_yx(Rc::new(PdObj::from(i)), Rc::clone(&obj));
+        env.set_yx(PdObj::from(i), PdObj::clone(&obj));
         for e in sandbox(env, &func, vec![obj])? {
             if body(e)? { broken = true; break; }
         }
@@ -861,21 +861,21 @@ fn pd_flatmap_foreach_core<F>(env: &mut Environment, func: &Rc<dyn Block>, mut b
     Ok(())
 }
 
-fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, body: F, it: PdIter) -> PdUnit where F: FnMut(Rc<PdObj>) -> PdResult<bool> {
+fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, body: F, it: PdIter) -> PdUnit where F: FnMut(PdObj) -> PdResult<bool> {
     env.push_yx();
     let core = pd_flatmap_foreach_core(env, func, body, it);
     env.pop_yx();
     core
 }
 
-fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<Rc<PdObj>>> {
+fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
     let mut acc = Vec::new();
     pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(false) }, it)?;
     Ok(acc)
 }
 
 // TODO: I don't think F should need to borrow &B, but it's tricky.
-fn pd_flat_fold_with_short_circuit<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, Rc<PdObj>) -> PdResult<(bool, B)> {
+fn pd_flat_fold_with_short_circuit<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, PdObj) -> PdResult<(bool, B)> {
     let mut acc = init;
     pd_flatmap_foreach(env, func, |o| {
         let (do_break, acc2) = body(&acc, o)?;
@@ -885,7 +885,7 @@ fn pd_flat_fold_with_short_circuit<B, F>(env: &mut Environment, func: &Rc<dyn Bl
     Ok(acc)
 }
 
-fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, Rc<PdObj>) -> PdResult<B> {
+fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, PdObj) -> PdResult<B> {
     let mut acc = init;
     pd_flatmap_foreach(env, func, |o| { acc = body(&acc, o)?; Ok(false) }, it)?;
     Ok(acc)
@@ -910,18 +910,18 @@ impl Block for OneBodyBlock {
     }
 }
 fn pop_seq_range_for(env: &mut Environment, name: &'static str) -> PdResult<PdSeq> {
-    let opt_seq = seq_range(&*env.pop_result(format!("{} no stack", name).as_str())?);
+    let opt_seq = seq_range(&env.pop_result(format!("{} no stack", name).as_str())?);
     opt_seq.ok_or(PdError::BadArgument(format!("{} coercion fail", name)))
 }
 
 #[derive(Debug)]
 struct BindBlock {
     body: Rc<dyn Block>,
-    bound_object: Rc<PdObj>,
+    bound_object: PdObj,
 }
 impl Block for BindBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
-        env.push(Rc::clone(&self.bound_object));
+        env.push(PdObj::clone(&self.bound_object));
         self.body.run(env)
     }
     fn code_repr(&self) -> String {
@@ -931,7 +931,7 @@ impl Block for BindBlock {
 
 #[derive(Debug, PartialEq)]
 pub enum RcLeader {
-    Lit(Rc<PdObj>),
+    Lit(PdObj),
     Var(Rc<String>),
 }
 
@@ -947,19 +947,19 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
     tokens.into_iter().map(|lex::Token(leader, trailer)| {
         let rcleader = match leader {
             lex::Leader::StringLit(s) => {
-                RcLeader::Lit(Rc::new(PdObj::from(s)))
+                RcLeader::Lit(PdObj::from(s))
             }
             lex::Leader::IntLit(n) => {
-                RcLeader::Lit(Rc::new(PdObj::from(n)))
+                RcLeader::Lit(PdObj::from(n))
             }
             lex::Leader::CharLit(c) => {
-                RcLeader::Lit(Rc::new(PdObj::from(c)))
+                RcLeader::Lit(PdObj::from(c))
             }
             lex::Leader::FloatLit(f) => {
-                RcLeader::Lit(Rc::new(PdObj::from(f)))
+                RcLeader::Lit(PdObj::from(f))
             }
             lex::Leader::Block(t, b) => {
-                RcLeader::Lit(Rc::new(PdObj::Block(Rc::new(CodeBlock(t, rcify(b))))))
+                RcLeader::Lit(PdObj::Block(Rc::new(CodeBlock(t, rcify(b)))))
             }
             lex::Leader::Var(s) => {
                 RcLeader::Var(Rc::new(s))
@@ -979,29 +979,29 @@ impl CodeBlock {
     }
 }
 
-fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> PdResult<(Rc<PdObj>, bool)> {
+fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> PdResult<(PdObj, bool)> {
     let body: Rc<dyn Block> = Rc::clone(bb);
-    Ok((Rc::new(PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
+    Ok(((PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
 }
-fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::Trailer) -> PdResult<(Rc<PdObj>, bool)> {
+fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trailer) -> PdResult<(PdObj, bool)> {
     let mut trailer: &str = trailer0.0.as_ref();
     trailer = trailer.strip_prefix('_').unwrap_or(trailer);
 
-    match &**obj {
+    match obj {
         PdObj::Num(n) => match trailer {
-            "m" | "minus" => { Ok((Rc::new(PdObj::from(-&**n)), false)) }
-            "h" | "hundred" => { Ok((Rc::new(PdObj::from(n.mul_const(100))), false)) }
-            "k" | "thousand" => { Ok((Rc::new(PdObj::from(n.mul_const(1000))), false)) }
+            "m" | "minus" => { Ok(((PdObj::from(-&**n)), false)) }
+            "h" | "hundred" => { Ok(((PdObj::from(n.mul_const(100))), false)) }
+            "k" | "thousand" => { Ok(((PdObj::from(n.mul_const(1000))), false)) }
             "p" | "power" => {
                 let exponent: PdNum = PdNum::clone(n);
-                Ok((Rc::new(PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
+                Ok(((PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
             }
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
         PdObj::Block(bb) => match trailer {
             "b" | "bind" => {
                 let b = outer_env.pop_result("bind nothing to bind")?;
-                Ok((Rc::new(PdObj::Block(Rc::new(BindBlock {
+                Ok(((PdObj::Block(Rc::new(BindBlock {
                     body: Rc::clone(bb),
                     bound_object: b,
                 }))), true))
@@ -1009,7 +1009,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::T
             "e" | "each" => obb("each", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "each")?;
                 for obj in seq.iter() {
-                    env.push(Rc::clone(&obj));
+                    env.push(PdObj::clone(&obj));
                     body.run(env)?;
                 }
                 Ok(())
@@ -1057,14 +1057,14 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::T
                 let seq = pop_seq_range_for(env, "sum")?;
                 let res = pd_flat_fold(env, body, PdNum::from(0),
                     |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
-                env.push(Rc::new(PdObj::from(res)));
+                env.push(PdObj::from(res));
                 Ok(())
             }),
             "â" | "all" => obb("all", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "all")?;
                 let res = pd_flat_fold_with_short_circuit(env, body, true,
                     |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
-                env.push(Rc::new(PdObj::from(bi_iverson(res))));
+                env.push(PdObj::from(bi_iverson(res)));
                 Ok(())
             }),
             "v" | "bindmap" | "vectorize" => obb("all", bb, |env, body| {
@@ -1086,7 +1086,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::T
     }
 }
 
-fn apply_all_trailers(env: &mut Environment, mut obj: Rc<PdObj>, mut reluctant: bool, trailer: &[lex::Trailer]) -> PdResult<(Rc<PdObj>, bool)> {
+fn apply_all_trailers(env: &mut Environment, mut obj: PdObj, mut reluctant: bool, trailer: &[lex::Trailer]) -> PdResult<(PdObj, bool)> {
     for t in trailer {
         let np = apply_trailer(env, &obj, t)?; // unwraps or returns Err from entire function
         obj = np.0;
@@ -1095,11 +1095,11 @@ fn apply_all_trailers(env: &mut Environment, mut obj: Rc<PdObj>, mut reluctant: 
     Ok((obj, reluctant))
 }
 
-fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailers: &'b[lex::Trailer]) -> Option<(&'a Rc<PdObj>, &'b[lex::Trailer])> {
+fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailers: &'b[lex::Trailer]) -> Option<(&'a PdObj, &'b[lex::Trailer])> {
 
     let mut var: String = leader.to_string();
 
-    let mut last_found: Option<(&'a Rc<PdObj>, &'b[lex::Trailer])> = None;
+    let mut last_found: Option<(&'a PdObj, &'b[lex::Trailer])> = None;
 
     if let Some(res) = env.get(leader) {
         last_found = Some((res, trailers)); // lowest priority
@@ -1138,11 +1138,11 @@ impl Block for CodeBlock {
             // println!("{:?} {:?}", leader, trailer);
             let (obj, reluctant) = match leader {
                 RcLeader::Lit(obj) => {
-                    apply_all_trailers(env, Rc::clone(obj), true, trailer)?
+                    apply_all_trailers(env, PdObj::clone(obj), true, trailer)?
                 }
                 RcLeader::Var(s) => {
                     let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(String::clone(s)))?;
-                    let cobj = Rc::clone(obj); // borrow checker to drop obj which unborrows env
+                    let cobj = PdObj::clone(obj); // borrow checker to drop obj which unborrows env
                     apply_all_trailers(env, cobj, false, rest)?
                 }
             };
@@ -1160,8 +1160,8 @@ impl Block for CodeBlock {
     }
 }
 
-fn apply_on(env: &mut Environment, obj: Rc<PdObj>) -> PdUnit {
-    match &*obj {
+fn apply_on(env: &mut Environment, obj: PdObj) -> PdUnit {
+    match obj {
         PdObj::Num(_)    => { env.push(obj); Ok(()) }
         PdObj::String(_) => { env.push(obj); Ok(()) }
         PdObj::List(_)   => { env.push(obj); Ok(()) }
@@ -1173,7 +1173,7 @@ macro_rules! n_n {
     ($a:ident, $x:expr) => {
         unary_num_case(|_, a| {
             let $a: &PdNum = a;
-            Ok(vec![Rc::new(PdObj::from($x))])
+            Ok(vec![PdObj::from($x)])
         })
     };
 }
@@ -1182,7 +1182,7 @@ macro_rules! nn_n {
         binary_num_case(|_, a, b| {
             let $a: &PdNum = &**a;
             let $b: &PdNum = &**b;
-            Ok(vec![Rc::new(PdObj::from($x))])
+            Ok(vec![PdObj::from($x)])
         })
     };
 }
@@ -1200,19 +1200,25 @@ macro_rules! cc {
     }
 }
 
+macro_rules! poc {
+    ($($case:expr),*) => {
+        vec![$( PdObj::clone(&$case) ),*];
+    }
+}
+
 macro_rules! juggle {
     ($a:ident -> $($res:expr),*) => {
-        { let v: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, $a| Ok(cc![ $( $res ),* ]) }); v }
+        { let v: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, $a| Ok(poc![ $( $res ),* ]) }); v }
     };
     ($a:ident, $b:ident -> $($res:expr),*) => {
-        { let v: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, $a, $b| Ok(cc![ $( $res ),* ]) }); v }
+        { let v: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, $a, $b| Ok(poc![ $( $res ),* ]) }); v }
     };
     ($a:ident, $b:ident, $c:ident -> $($res:expr),*) => {
-        { let v: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, $a, $b, $c| Ok(cc![ $( $res ),* ]) }); v }
+        { let v: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, $a, $b, $c| Ok(poc![ $( $res ),* ]) }); v }
     };
 }
 
-fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::List(Rc::new(xs))) }
+fn pd_list(xs: Vec<PdObj>) -> PdObj { PdObj::List(Rc::new(xs)) }
 
 fn pd_truthy(x: &PdObj) -> bool {
     match x {
@@ -1278,7 +1284,7 @@ fn pd_build_if_string(x: Vec<PdNum>) -> PdObj {
     if char_ok {
         PdObj::from(chars)
     } else {
-        PdObj::List(Rc::new(x.iter().map(|e| Rc::new(PdObj::Num(Rc::new(e.clone())))).collect()))
+        PdObj::List(Rc::new(x.iter().map(|e| PdObj::Num(Rc::new(e.clone()))).collect()))
     }
 }
 
@@ -1288,7 +1294,7 @@ fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
     match x {
         PdObj::Num(n) => PdObj::Num(Rc::new(f(&*n))),
         PdObj::String(s) => pd_build_if_string(s.iter().map(|c| f(&PdNum::from(*c))).collect()),
-        PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| Rc::new(pd_deep_map(f, &*e))).collect())),
+        PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| pd_deep_map(f, &*e)).collect())),
         _ => { panic!("wtf not deep"); }
     }
 }
@@ -1304,7 +1310,7 @@ fn pd_key(obj: &PdObj) -> PdResult<PdKey> {
     match obj {
         PdObj::Num(x) => Ok(PdKey::Num(PdTotalNum(Rc::clone(x)))),
         PdObj::String(x) => Ok(PdKey::String(Rc::clone(x))),
-        PdObj::List(x) => Ok(PdKey::List(Rc::new(x.iter().map(|k| Ok(Rc::new(pd_key(&**k)?))).collect::<PdResult<Vec<Rc<PdKey>>>>()?))),
+        PdObj::List(x) => Ok(PdKey::List(Rc::new(x.iter().map(|k| Ok(Rc::new(pd_key(&*k)?))).collect::<PdResult<Vec<Rc<PdKey>>>>()?))),
         PdObj::Block(b) => Err(PdError::UnhashableBlock(b.code_repr())),
     }
 }
@@ -1313,7 +1319,7 @@ fn pd_key(obj: &PdObj) -> PdResult<PdKey> {
 pub enum PdObj {
     Num(PdNum),
     String(Rc<Vec<char>>),
-    List(Rc<Vec<Rc<PdObj>>>),
+    List(Rc<Vec<PdObj>>),
     Block(Rc<dyn Block>),
 }
 */
@@ -1321,13 +1327,13 @@ pub enum PdObj {
 // """Iterate a block, peeking at the stack top at the start and after each
 // iteration, until a value repeats. Pop that value. Returns the list of (all
 // distinct) elements peeked along the way and the final repeated value."""
-fn pd_iterate(env: &mut Environment, func: &Rc<dyn Block>) -> PdResult<(Vec<Rc<PdObj>>, Rc<PdObj>)> {
-    let mut acc: Vec<Rc<PdObj>> = Vec::new();
+fn pd_iterate(env: &mut Environment, func: &Rc<dyn Block>) -> PdResult<(Vec<PdObj>, PdObj)> {
+    let mut acc: Vec<PdObj> = Vec::new();
     let mut seen: HashSet<PdKey> = HashSet::new();
 
     loop {
         let obj = env.peek_result("iterate nothing to peek")?;
-        let key = pd_key(&*obj)?;
+        let key = pd_key(&obj)?;
         if seen.contains(&key) {
             env.pop_result("iterate final pop shouldn't fail lmao?")?;
             return Ok((acc, obj))
@@ -1342,7 +1348,7 @@ fn pd_iterate(env: &mut Environment, func: &Rc<dyn Block>) -> PdResult<(Vec<Rc<P
 fn key_counter(a: &PdSeq) -> PdResult<HashMap<PdKey, usize>> {
     let mut ret = HashMap::new();
     for e in a.iter() {
-        let key = pd_key(&*e)?;
+        let key = pd_key(&e)?;
         match ret.get_mut(&key) {
             Some(place) => { *place = *place + 1usize; }
             None => { ret.insert(key, 1usize); }
@@ -1354,12 +1360,12 @@ fn key_counter(a: &PdSeq) -> PdResult<HashMap<PdKey, usize>> {
 fn key_set(a: &PdSeq) -> PdResult<HashSet<PdKey>> {
     let mut ret = HashSet::new();
     for e in a.iter() {
-        ret.insert(pd_key(&*e)?);
+        ret.insert(pd_key(&e)?);
     }
     Ok(ret)
 }
 
-fn pd_build_like(ty: PdSeqBuildType, x: Vec<Rc<PdObj>>) -> PdObj {
+fn pd_build_like(ty: PdSeqBuildType, x: Vec<PdObj>) -> PdObj {
     if ty == PdSeqBuildType::NotString {
         return PdObj::List(Rc::new(x))
     }
@@ -1367,7 +1373,7 @@ fn pd_build_like(ty: PdSeqBuildType, x: Vec<Rc<PdObj>>) -> PdObj {
     let mut chars: Vec<char> = Vec::new();
     let mut char_ok = true;
     for n in &x {
-        match &**n {
+        match &*n {
             PdObj::Num(nn) => match &**nn {
                 PdNum::Char(c) => { chars.push(c.to_u32().and_then(std::char::from_u32).expect("char, c'mon (pdbl)")); }
                 _ => { char_ok = false; break }
@@ -1516,7 +1522,7 @@ pub fn initialize(env: &mut Environment) {
     let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
     let min_seq_case = unary_seq_case(|_, a: &PdSeq| {
-        let mut best: Option<Rc<PdObj>> = None;
+        let mut best: Option<PdObj> = None;
         // i don't think i can simplify this easily because of the inner return Err
         for obj in a.iter() {
             match best {
@@ -1534,7 +1540,7 @@ pub fn initialize(env: &mut Environment) {
         Ok(vec![best.ok_or(PdError::BadList("Min of empty list"))?])
     });
     let max_seq_case = unary_seq_case(|_, a: &PdSeq| {
-        let mut best: Option<Rc<PdObj>> = None;
+        let mut best: Option<PdObj> = None;
         // i don't think i can simplify this easily because of the inner return Err
         for obj in a.iter() {
             match best {
@@ -1567,10 +1573,10 @@ pub fn initialize(env: &mut Environment) {
     let butlast_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_last().ok_or(PdError::BadList("Butlast of empty list"))?.1]) });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
-        env.variables.insert(name.to_string(), Rc::new(PdObj::Block(Rc::new(CasedBuiltIn {
+        env.variables.insert(name.to_string(), PdObj::Block(Rc::new(CasedBuiltIn {
             name: name.to_string(),
             cases,
-        }))));
+        })));
     };
 
     let map_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -1581,9 +1587,9 @@ pub fn initialize(env: &mut Environment) {
         }
     });
 
-    let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(a * a))]) });
+    let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(a * a))]) });
 
-    let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
+    let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
     let index_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
@@ -1594,7 +1600,7 @@ pub fn initialize(env: &mut Environment) {
     });
     let len_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
-        func: |_, seq| { Ok(vec![Rc::new(PdObj::from(seq.len()))]) },
+        func: |_, seq| { Ok(vec![(PdObj::from(seq.len()))]) },
     });
     let down_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: seq_range,
@@ -1634,7 +1640,7 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_string,
         coerce2: just_string,
         func: |_, seq, tok| {
-            Ok(vec![pd_list(slice_util::split_slice_by(seq.as_slice(), tok.as_slice()).iter().map(|s| Rc::new(PdObj::String(Rc::new(s.to_vec())))).collect())])
+            Ok(vec![pd_list(slice_util::split_slice_by(seq.as_slice(), tok.as_slice()).iter().map(|s| (PdObj::String(Rc::new(s.to_vec())))).collect())])
         },
     });
     let seq_split_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -1648,12 +1654,12 @@ pub fn initialize(env: &mut Environment) {
     let cat_list_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: list_singleton,
         coerce2: list_singleton,
-        func: |_, seq1: &Rc<Vec<Rc<PdObj>>>, seq2: &Rc<Vec<Rc<PdObj>>>| {
+        func: |_, seq1: &Rc<Vec<PdObj>>, seq2: &Rc<Vec<PdObj>>| {
             let mut v = Vec::new();
             v.extend((&**seq1).iter().cloned());
             v.extend((&**seq2).iter().cloned());
 
-            Ok(vec![Rc::new(PdObj::List(Rc::new(v)))])
+            Ok(vec![(PdObj::List(Rc::new(v)))])
         },
     });
 
@@ -1661,28 +1667,28 @@ pub fn initialize(env: &mut Environment) {
         coerce1: seq_range,
         coerce2: seq_range,
         func: |_, seq1, seq2| {
-            Ok(vec![Rc::new(pd_seq_intersection(seq1, seq2)?)])
+            Ok(vec![pd_seq_intersection(seq1, seq2)?])
         },
     });
     let union_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
         func: |_, seq1, seq2| {
-            Ok(vec![Rc::new(pd_seq_union(seq1, seq2)?)])
+            Ok(vec![pd_seq_union(seq1, seq2)?])
         },
     });
     let set_difference_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
         func: |_, seq1, seq2| {
-            Ok(vec![Rc::new(pd_seq_set_difference(seq1, seq2)?)])
+            Ok(vec![pd_seq_set_difference(seq1, seq2)?])
         },
     });
     let symmetric_difference_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
         func: |_, seq1, seq2| {
-            Ok(vec![Rc::new(pd_seq_symmetric_difference(seq1, seq2)?)])
+            Ok(vec![pd_seq_symmetric_difference(seq1, seq2)?])
         },
     });
 
@@ -1733,32 +1739,32 @@ pub fn initialize(env: &mut Environment) {
     add_cases(";a",  vec![juggle!(_a, b, _c -> b)]);
     add_cases("¸",   vec![juggle!(_a, b -> b)]);
 
-    let pack_one_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![pd_list(vec![Rc::clone(a)])]) });
+    let pack_one_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![pd_list(vec![PdObj::clone(a)])]) });
     add_cases("†", cc![pack_one_case]);
-    let pack_two_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(vec![Rc::clone(a), Rc::clone(b)])]) });
+    let pack_two_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(vec![PdObj::clone(a), PdObj::clone(b)])]) });
     add_cases("‡", cc![pack_two_case]);
-    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(bi_iverson(!pd_truthy(a))))]) });
+    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(bi_iverson(!pd_truthy(a))))]) });
     add_cases("!", cc![not_case]);
 
-    let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_sum(a)?))]) });
+    let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)?))]) });
     add_cases("Š", cc![sum_case]);
 
-    let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_product(a)?))]) });
+    let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_product(a)?))]) });
     add_cases("Þ", cc![product_case]);
 
-    let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_sum(a)? / PdNum::Float(pd_deep_length(a)? as f64)))]) });
+    let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)? / PdNum::Float(pd_deep_length(a)? as f64)))]) });
     add_cases("Av", cc![average_case]);
 
-    let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_square_sum(a)?.sqrt().ok_or(PdError::NumericError("sqrt in hypotenuse failed"))?))]) });
+    let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_square_sum(a)?.sqrt().ok_or(PdError::NumericError("sqrt in hypotenuse failed"))?))]) });
     add_cases("Hy", cc![hypotenuse_case]);
 
-    let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_standard_deviation(a)?))]) });
+    let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_standard_deviation(a)?))]) });
     add_cases("Sg", cc![standard_deviation_case]);
 
     let iterate_case: Rc<dyn Case> = Rc::new(UnaryCase { func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]), coerce: just_block });
     add_cases("I", cc![iterate_case]);
 
-    // env.variables.insert("X".to_string(), Rc::new(PdObj::Int(3.to_bigint().unwrap())));
+    // env.variables.insert("X".to_string(), (PdObj::Int(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::from('\n'));
     env.short_insert("A", PdObj::from(10));
     env.short_insert("¹", PdObj::from(11));
@@ -1798,9 +1804,9 @@ pub fn initialize(env: &mut Environment) {
     env.short_insert("~", PdObj::Block(Rc::new(BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
-            match &*env.pop_result("~ failed")? {
+            match env.pop_result("~ failed")? {
                 PdObj::Block(bb) => bb.run(env),
-                PdObj::List(ls) => { env.extend_clone(ls); Ok(()) }
+                PdObj::List(ls) => { env.extend_clone(&*ls); Ok(()) }
                 _ => Err(PdError::BadArgument("~ can't handle".to_string())),
             }
         },
@@ -1823,7 +1829,7 @@ pub fn initialize(env: &mut Environment) {
     })));
 }
 
-pub fn simple_eval(code: &str) -> Vec<Rc<PdObj>> {
+pub fn simple_eval(code: &str) -> Vec<PdObj> {
     let mut env = Environment::new();
     initialize(&mut env);
 

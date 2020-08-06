@@ -2,12 +2,12 @@ use std::rc::Rc;
 // use num::bigint::BigInt;
 extern crate paradoc;
 
-fn int(x: i32) -> Rc<paradoc::PdObj> {
-    Rc::new(paradoc::PdObj::from(x))
+fn int(x: i32) -> paradoc::PdObj {
+    paradoc::PdObj::from(x)
 }
 
-fn list(xs: Vec<Rc<paradoc::PdObj>>) -> Rc<paradoc::PdObj> {
-    Rc::new(paradoc::PdObj::List(Rc::new(xs)))
+fn list(xs: Vec<paradoc::PdObj>) -> paradoc::PdObj {
+    paradoc::PdObj::List(Rc::new(xs))
 }
 
 
