@@ -180,6 +180,20 @@ impl PdNum {
         }
     }
 
+    pub fn to_clamped_usize(&self) -> usize {
+        match self {
+            PdNum::Int(n) => {
+                if n <= &BigInt::from(0) { 0usize } else { n.to_usize().unwrap_or(usize::MAX) }
+            }
+            PdNum::Float(f) => {
+                if *f <= 0.0 || f.is_nan() { 0usize } else { f.trunc().to_usize().unwrap_or(usize::MAX) }
+            }
+            PdNum::Char(c) => {
+                if c <= &BigInt::from(0) { 0usize } else { c.to_usize().unwrap_or(usize::MAX) }
+            }
+        }
+    }
+
     pub fn to_nn_usize(&self) -> Option<usize> {
         let s = self.to_usize()?;
         if s == 0 { None } else { Some(s) }

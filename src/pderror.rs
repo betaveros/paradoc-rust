@@ -9,6 +9,7 @@ pub enum PdError {
     UnhashableBlock(String),
     IndexError(String),
     BadComparison,
+    BadParse,
 }
 
 pub type PdResult<T> = Result<T, PdError>;

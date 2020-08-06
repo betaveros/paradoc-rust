@@ -4,13 +4,19 @@ use num::bigint::BigInt;
 #[derive(Debug, PartialEq, Eq)]
 pub struct Trailer(pub String);
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum BlockType {
+    Normal,
+    Map,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Leader {
     StringLit(String),
     IntLit(BigInt),
     CharLit(char),
     FloatLit(f64),
-    Block(Vec<Trailer>, Vec<Token>),
+    Block(BlockType, Vec<Trailer>, Vec<Token>),
     Var(String),
 }
 
@@ -144,7 +150,14 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
                 assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
                 let start_trailers = parse_trailer(trailer);
                 trailer = tokens[ni].1;
-                (Leader::Block(start_trailers, inner), ni + 1)
+                (Leader::Block(BlockType::Normal, start_trailers, inner), ni + 1)
+            }
+            Some('µ') => {
+                let (inner, ni) = parse_at(tokens, cur + 1);
+                assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
+                let start_trailers = parse_trailer(trailer);
+                trailer = tokens[ni].1;
+                (Leader::Block(BlockType::Map, start_trailers, inner), ni + 1)
             }
             Some('}') => { break; }
             None => { break; }

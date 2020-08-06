@@ -422,6 +422,9 @@ impl Case for TernaryAnyCase {
     }
 }
 
+fn just_any(obj: &PdObj) -> Option<PdObj> {
+    Some(PdObj::clone(obj))
+}
 fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
     match obj {
         PdObj::Num(n) => Some(Rc::clone(n)),
@@ -433,6 +436,12 @@ fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
 fn num_to_isize(obj: &PdObj) -> Option<isize> {
     match obj {
         PdObj::Num(n) => n.to_isize(),
+        _ => None,
+    }
+}
+fn num_to_clamped_usize(obj: &PdObj) -> Option<usize> {
+    match obj {
+        PdObj::Num(n) => Some(n.to_clamped_usize()),
         _ => None,
     }
 }
@@ -929,6 +938,23 @@ impl Block for BindBlock {
     }
 }
 
+#[derive(Debug)]
+struct UnderBindBlock {
+    body: Rc<dyn Block>,
+    bound_object: PdObj,
+}
+impl Block for UnderBindBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let skip = env.pop_result("underbind skip fail")?;
+        env.push(PdObj::clone(&self.bound_object));
+        env.push(skip);
+        self.body.run(env)
+    }
+    fn code_repr(&self) -> String {
+        self.body.code_repr() + "_bind"
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum RcLeader {
     Lit(PdObj),
@@ -944,7 +970,7 @@ pub struct RcToken(pub RcLeader, pub Vec<lex::Trailer>);
 fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
     // for .. in .., which is implicitly into_iter(), can move ownership out of the array
     // (iter() borrows elements only, but we are consuming tokens here)
-    tokens.into_iter().map(|lex::Token(leader, trailer)| {
+    tokens.into_iter().map(|lex::Token(leader, mut trailer)| {
         let rcleader = match leader {
             lex::Leader::StringLit(s) => {
                 RcLeader::Lit(PdObj::from(s))
@@ -958,7 +984,13 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
             lex::Leader::FloatLit(f) => {
                 RcLeader::Lit(PdObj::from(f))
             }
-            lex::Leader::Block(t, b) => {
+            lex::Leader::Block(ty, t, b) => {
+                match ty {
+                    lex::BlockType::Normal => {}
+                    lex::BlockType::Map => {
+                        trailer.insert(0, lex::Trailer("map".to_string()))
+                    }
+                }
                 RcLeader::Lit(PdObj::Block(Rc::new(CodeBlock(t, rcify(b)))))
             }
             lex::Leader::Var(s) => {
@@ -1067,7 +1099,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(PdObj::from(bi_iverson(res)));
                 Ok(())
             }),
-            "v" | "bindmap" | "vectorize" => obb("all", bb, |env, body| {
+            "v" | "bindmap" | "vectorize" => obb("bindmap", bb, |env, body| {
                 let b = env.pop_result("bindmap nothing to bind")?;
                 let bb: Rc<dyn Block> = Rc::new(BindBlock {
                     body: Rc::clone(body),
@@ -1075,6 +1107,19 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 });
 
                 let seq = pop_seq_range_for(env, "bindmap")?;
+                let res = pd_map(env, &bb, seq.iter())?;
+                env.push(pd_list(res));
+                Ok(())
+            }),
+            "y" | "mapbind" => obb("mapbind", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "mapbind")?;
+
+                let b = env.pop_result("mapbind nothing to bind")?;
+                let bb: Rc<dyn Block> = Rc::new(UnderBindBlock {
+                    body: Rc::clone(body),
+                    bound_object: b,
+                });
+
                 let res = pd_map(env, &bb, seq.iter())?;
                 env.push(pd_list(res));
                 Ok(())
@@ -1761,8 +1806,30 @@ pub fn initialize(env: &mut Environment) {
     let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_standard_deviation(a)?))]) });
     add_cases("Sg", cc![standard_deviation_case]);
 
-    let iterate_case: Rc<dyn Case> = Rc::new(UnaryCase { func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]), coerce: just_block });
-    add_cases("I", cc![iterate_case]);
+    // FIXME
+    let to_int_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_string,
+        func: |_, s: &Rc<Vec<char>>| Ok(vec![PdObj::from(s.iter().collect::<String>().parse::<BigInt>().map_err(|_| PdError::BadParse)?)]),
+    });
+    let iterate_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_block,
+        func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]),
+    });
+    add_cases("I", cc![to_int_case, iterate_case]);
+
+    let replicate_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_any,
+        coerce2: num_to_clamped_usize,
+        func: |_, a, n| {
+            // resize() or vec![_; ] just clones but i don't want that to be silent
+            // idk if this is being paranoid, but we've come this far
+            let mut vec = Vec::new();
+            vec.resize_with(*n, || PdObj::clone(a));
+            Ok(vec![pd_list(vec)])
+        },
+    });
+    add_cases("°", cc![replicate_case]);
+
 
     // env.variables.insert("X".to_string(), (PdObj::Int(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::from('\n'));
