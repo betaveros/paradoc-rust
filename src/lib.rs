@@ -1316,6 +1316,10 @@ pub fn initialize(env: &mut Environment) {
     let mod_case = nn_n![a, b, a % b];
     let intdiv_case = nn_n![a, b, a.div_floor(b)];
 
+    let bitand_case = nn_n![a, b, a & b];
+    let bitor_case  = nn_n![a, b, a | b];
+    let bitxor_case = nn_n![a, b, a ^ b];
+
     let inc_case   = n_n![a, a.add_const( 1)];
     let dec_case   = n_n![a, a.add_const(-1)];
     let inc2_case  = n_n![a, a.add_const( 2)];
@@ -1469,6 +1473,9 @@ pub fn initialize(env: &mut Environment) {
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case]);
+    add_cases("&", cc![bitand_case]);
+    add_cases("|", cc![bitor_case]);
+    add_cases("^", cc![bitxor_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
     add_cases("=", cc![eq_case, index_case]);

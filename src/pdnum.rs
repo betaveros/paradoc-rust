@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use std::cmp::Ordering;
-use std::ops::{Add, Sub, Mul, Div, Rem, Neg, Deref};
+use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Neg, Deref};
 use std::ops::AddAssign;
 use std::iter::{Sum, Product};
 use std::hash::{Hash, Hasher};
@@ -441,3 +441,48 @@ impl Product for PdNum {
         iter.fold(PdNum::Int(BigInt::from(1)), Mul::mul)
     }
 }
+
+// things that have to be BigInts and we just force it
+fn force_bi(f: f64, err: &str) -> BigInt {
+    f.trunc().to_bigint().expect(format!("{}: float didn't trunc to integer", err).as_str())
+}
+
+macro_rules! force_bi_binary_match {
+    ($a:expr, $b:expr, $method:ident, $intmethod:expr) => {
+        match ($a, $b) {
+            (PdNum::Int  (a), PdNum::Int  (b)) => PdNum::Int($intmethod(a, b)),
+            (PdNum::Int  (a), PdNum::Float(b)) => PdNum::Int($intmethod(a, force_bi(*b, stringify!($method)))),
+            (PdNum::Int  (a), PdNum::Char (b)) => PdNum::Int($intmethod(a, b)),
+            (PdNum::Float(a), PdNum::Int  (b)) => PdNum::Int($intmethod(force_bi(*a, stringify!($method)), b)),
+            (PdNum::Float(a), PdNum::Float(b)) => PdNum::Int($intmethod(force_bi(*a, stringify!($method)), force_bi(*b, stringify!($method)))),
+            (PdNum::Float(a), PdNum::Char (b)) => PdNum::Int($intmethod(force_bi(*a, stringify!($method)), b)),
+            (PdNum::Char (a), PdNum::Int  (b)) => PdNum::Int($intmethod(a, b)),
+            (PdNum::Char (a), PdNum::Float(b)) => PdNum::Int($intmethod(a, force_bi(*b, stringify!($method)))),
+            (PdNum::Char (a), PdNum::Char (b)) => PdNum::Char($intmethod(a, b)),
+        }
+    };
+}
+
+macro_rules! def_force_bi_binary_method {
+    ($method:ident, $intmethod:expr) => {
+        fn $method(self, other: &PdNum) -> PdNum {
+            force_bi_binary_match!(self, other, $method, $intmethod)
+        }
+    };
+}
+
+macro_rules! impl_force_bi_binary_method {
+    ($imp:ident, $method:ident, $intmethod:expr) => {
+        impl $imp<&PdNum> for &PdNum {
+            type Output = PdNum;
+
+            def_force_bi_binary_method!($method, $intmethod);
+        }
+
+        forward_impl_binary_method!($imp, $method);
+    };
+}
+
+impl_force_bi_binary_method!(BitAnd, bitand, BitAnd::bitand);
+impl_force_bi_binary_method!(BitOr, bitor, BitOr::bitor);
+impl_force_bi_binary_method!(BitXor, bitxor, BitXor::bitxor);
