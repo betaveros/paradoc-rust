@@ -1008,6 +1008,31 @@ macro_rules! nn_n {
         })
     };
 }
+/*
+    let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(cc![a, a]) });
+    add_cases(":", cc![dup_case]);
+*/
+
+// I don't really understand what's going on but apparently $(xyz),* has no trailing commas
+// and $(xyz,)* does and maybe the latter is compatible with the former but not vice versa?
+
+macro_rules! cc {
+    ($($case:expr),*) => {
+        vec![$( Rc::clone(&$case) ),*];
+    }
+}
+
+macro_rules! juggle {
+    ($a:ident -> $($res:expr),*) => {
+        { let v: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, $a| Ok(cc![ $( $res ),* ]) }); v }
+    };
+    ($a:ident, $b:ident -> $($res:expr),*) => {
+        { let v: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, $a, $b| Ok(cc![ $( $res ),* ]) }); v }
+    };
+    ($a:ident, $b:ident, $c:ident -> $($res:expr),*) => {
+        { let v: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, $a, $b, $c| Ok(cc![ $( $res ),* ]) }); v }
+    };
+}
 
 fn pd_list(xs: Vec<Rc<PdObj>>) -> Rc<PdObj> { Rc::new(PdObj::List(Rc::new(xs))) }
 
@@ -1193,12 +1218,6 @@ pub fn initialize(env: &mut Environment) {
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
-    macro_rules! cc {
-        ($($case:expr),*) => {
-            vec![$( Rc::clone(&$case), )*];
-        }
-    }
-
     add_cases("+", cc![plus_case]);
     add_cases("-", cc![minus_case]);
     add_cases("*", cc![times_case]);
@@ -1220,29 +1239,19 @@ pub fn initialize(env: &mut Environment) {
     add_cases("²", cc![square_case]);
     add_cases(" r", cc![space_join_case]);
 
-    let dup_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(cc![a, a]) });
-    add_cases(":", cc![dup_case]);
-    let dup_pair_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(cc![a, b, a, b]) });
-    add_cases(":p", cc![dup_pair_case]);
-    let dup_around_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(cc![a, b, a]) });
-    add_cases(":a", cc![dup_around_case]);
-    let swap_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(cc![b, a]) });
-    add_cases("\\", cc![swap_case]);
-    let swap_in_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, a, b, c| Ok(cc![c, a, b]) });
-    add_cases("\\i", cc![swap_in_case]);
-    let swap_out_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, a, b, c| Ok(cc![b, c, a]) });
-    add_cases("\\o", cc![swap_out_case]);
+    add_cases(":",   vec![juggle!(a -> a, a)]);
+    add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);
+    add_cases(":a",  vec![juggle!(a, b -> a, b, a)]);
+    add_cases("\\",  vec![juggle!(a, b -> b, a)]);
+    add_cases("\\a", vec![juggle!(a, b, c -> c, b, a)]);
+    add_cases("\\i", vec![juggle!(a, b, c -> c, a, b)]);
+    add_cases("\\o", vec![juggle!(a, b, c -> b, c, a)]);
 
-    let pop_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, _a| Ok(cc![]) });
-    add_cases(";", cc![pop_case]);
-    let pop_out_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, b, c| Ok(cc![b, c]) });
-    add_cases(";o", cc![pop_out_case]);
-    let pop_pair_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, _b, c| Ok(cc![c]) });
-    add_cases(";p", cc![pop_pair_case]);
-    let pop_around_case: Rc<dyn Case> = Rc::new(TernaryAnyCase { func: |_, _a, b, _c| Ok(cc![b]) });
-    add_cases(";a", cc![pop_around_case]);
-    let pop_under_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, _a, b| Ok(cc![b]) });
-    add_cases("¸", cc![pop_under_case]);
+    add_cases(";",   vec![juggle!(_a -> )]);
+    add_cases(";o",  vec![juggle!(_a, b, c -> b, c)]);
+    add_cases(";p",  vec![juggle!(_a, _b, c -> c)]);
+    add_cases(";a",  vec![juggle!(_a, b, _c -> b)]);
+    add_cases("¸",   vec![juggle!(_a, b -> b)]);
 
     let pack_one_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![pd_list(vec![Rc::clone(a)])]) });
     add_cases("†", cc![pack_one_case]);
