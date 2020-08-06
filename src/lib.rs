@@ -427,6 +427,12 @@ fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
         _ => None,
     }
 }
+fn num_to_nn_usize(obj: &PdObj) -> Option<usize> {
+    match obj {
+        PdObj::Num(n) => n.to_nn_usize(),
+        _ => None,
+    }
+}
 fn just_string(obj: &PdObj) -> Option<Rc<Vec<char>>> {
     match obj {
         PdObj::String(s) => Some(Rc::clone(s)),
@@ -859,7 +865,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Tr
             "m" | "_m" | "_map" => obb("map", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "map")?;
                 let res = pd_map(env, body, seq.iter())?;
-                env.push(Rc::new(PdObj::List(Rc::new(res))));
+                env.push(pd_list(res));
                 Ok(())
             }),
             "u" | "_u" | "_under" => obb("under", bb, |env, body| {
@@ -909,7 +915,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Tr
 
                 let seq = pop_seq_range_for(env, "bindmap")?;
                 let res = pd_map(env, &bb, seq.iter())?;
-                env.push(Rc::new(PdObj::List(Rc::new(res))));
+                env.push(pd_list(res));
                 Ok(())
             }),
 
@@ -1265,18 +1271,32 @@ pub fn initialize(env: &mut Environment) {
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
-    let str_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
+    let seq_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_nn_usize,
+        func: |_, seq, size| {
+            Ok(vec![pd_list(slice_util::split_slice(seq.to_new_vec().as_slice(), *size, true).iter().map(|s| pd_list(s.to_vec())).collect())])
+        },
+    });
+    let str_split_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_string,
         coerce2: just_string,
         func: |_, seq, tok| {
-            Ok(vec![Rc::new(PdObj::List(Rc::new(slice_util::split_slice_by(seq.as_slice(), tok.as_slice()).iter().map(|s| Rc::new(PdObj::String(Rc::new(s.to_vec())))).collect())))])
+            Ok(vec![pd_list(slice_util::split_slice_by(seq.as_slice(), tok.as_slice()).iter().map(|s| Rc::new(PdObj::String(Rc::new(s.to_vec())))).collect())])
+        },
+    });
+    let seq_split_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: just_seq,
+        func: |_, seq, tok| {
+            Ok(vec![pd_list(slice_util::split_slice_by(seq.to_new_vec().as_slice(), tok.to_new_vec().as_slice()).iter().map(|s| pd_list(s.to_vec())).collect())])
         },
     });
 
     add_cases("+", cc![plus_case]);
     add_cases("-", cc![minus_case]);
     add_cases("*", cc![times_case]);
-    add_cases("/", cc![div_case, str_split_case]);
+    add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, map_case]);
     add_cases("÷", cc![intdiv_case]);
     add_cases("(", cc![dec_case, uncons_case]);
@@ -1334,7 +1354,7 @@ pub fn initialize(env: &mut Environment) {
     let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_standard_deviation(a)?))]) });
     add_cases("Sg", cc![standard_deviation_case]);
 
-    let iterate_case: Rc<dyn Case> = Rc::new(UnaryCase { func: |env, block| Ok(vec![Rc::new(PdObj::List(Rc::new(pd_iterate(env, block)?.0)))]), coerce: just_block });
+    let iterate_case: Rc<dyn Case> = Rc::new(UnaryCase { func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]), coerce: just_block });
     add_cases("I", cc![iterate_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::Int(3.to_bigint().unwrap())));
@@ -1361,7 +1381,7 @@ pub fn initialize(env: &mut Environment) {
         name: "Pack".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
-            env.push(Rc::new(PdObj::List(Rc::new(list))));
+            env.push(pd_list(list));
             Ok(())
         },
     })));
@@ -1370,7 +1390,7 @@ pub fn initialize(env: &mut Environment) {
         func: |env| {
             let mut list = env.pop_until_stack_marker();
             list.reverse();
-            env.push(Rc::new(PdObj::List(Rc::new(list))));
+            env.push(pd_list(list));
             Ok(())
         },
     })));

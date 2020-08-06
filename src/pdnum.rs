@@ -126,6 +126,19 @@ impl PdNum {
             PdNum::Char(_) => false,
         }
     }
+
+    pub fn to_usize(&self) -> Option<usize> {
+        match self {
+            PdNum::Int(n) => n.to_usize(),
+            PdNum::Float(f) => f.trunc().to_usize(),
+            PdNum::Char(c) => c.to_usize(),
+        }
+    }
+
+    pub fn to_nn_usize(&self) -> Option<usize> {
+        let s = self.to_usize()?;
+        if s == 0 { None } else { Some(s) }
+    }
 }
 
 // this seems... nontrivial??
