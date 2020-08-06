@@ -70,6 +70,14 @@ impl PdNum {
         }
     }
 
+    pub fn trunc(&self) -> PdNum {
+        match self {
+            PdNum::Int(_) => self.clone(),
+            PdNum::Char(_) => self.clone(),
+            PdNum::Float(f) => PdNum::Int(f.trunc().to_bigint().expect("Truncation of float was not integer")),
+        }
+    }
+
     pub fn abs(&self) -> PdNum {
         match self {
             PdNum::Int(k) => PdNum::Int(k.abs()),

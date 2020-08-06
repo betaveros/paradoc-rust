@@ -709,6 +709,12 @@ fn seq_range(obj: &PdObj) -> Option<PdSeq> {
         _ => just_seq(obj),
     }
 }
+fn seq_num_singleton(obj: &PdObj) -> Option<PdSeq> {
+    match obj {
+        PdObj::Num(_) => Some(PdSeq::List(Rc::new(vec![PdObj::clone(obj)]))),
+        _ => just_seq(obj),
+    }
+}
 fn just_block(obj: &PdObj) -> Option<Rc<dyn Block>> {
     match obj {
         PdObj::Block(a) => Some(Rc::clone(a)),
@@ -1404,7 +1410,16 @@ fn pd_deep_map_block(env: &mut Environment, func: &Rc<dyn Block>, x: PdObj) -> P
 
     match x {
         PdObj::Num(_) => sandbox(env, func, vec![x]),
-        PdObj::String(_) => { panic!("FIXME to be impl"); }
+        // TODO also fix
+        PdObj::String(s) => {
+            let mut acc: Vec<PdObj> = Vec::new();
+
+            for e in s.iter() {
+                acc.extend(pd_deep_map_block(env, func, PdObj::from(*e))?);
+            }
+
+            Ok(vec![pd_build_like(PdSeqBuildType::String, acc)])
+        }
         PdObj::List(x) => {
             let mut acc: Vec<PdObj> = Vec::new();
 
@@ -1422,17 +1437,15 @@ fn pd_deep_map_block(env: &mut Environment, func: &Rc<dyn Block>, x: PdObj) -> P
 fn pd_deep_zip<F>(f: &F, a: &PdObj, b: &PdObj) -> PdObj
     where F: Fn(&PdNum, &PdNum) -> PdNum {
 
-    match (a, b) {
-        (PdObj::Num(na), PdObj::Num(nb)) => PdObj::Num(Rc::new(f(na, nb))),
-        (PdObj::List(la), PdObj::Num(_)) => {
-            PdObj::List(Rc::new(la.iter().map(|e| pd_deep_zip(f, e, b)).collect()))
-        },
-        (PdObj::List(la), PdObj::List(lb)) => {
-            PdObj::List(Rc::new(la.iter().zip(lb.iter()).map(|(ea, eb)| pd_deep_zip(f, ea, eb)).collect()))
-        },
-        (PdObj::Block(_), _) => { panic!("wtf not deep"); }
-        (_, PdObj::Block(_)) => { panic!("wtf not deep"); }
-        (_, _) => { panic!("not implemented"); }
+    if let (PdObj::Num(na), PdObj::Num(nb)) = (a, b) {
+        PdObj::Num(Rc::new(f(na, nb)))
+    } else if let (Some(sa), Some(sb)) = (seq_num_singleton(a), seq_num_singleton(b)) {
+        pd_build_like(
+            sa.build_type() & sb.build_type(),
+            sa.iter().zip(sb.iter()).map(|(ea, eb)| pd_deep_zip(f, &ea, &eb)).collect()
+        )
+    } else {
+        panic!("wtf not deep");
     }
 }
 
@@ -1651,6 +1664,7 @@ pub fn initialize(env: &mut Environment) {
     let abs_case    = n_n![a, a.abs()];
     let neg_case    = n_n![a, -a];
     let signum_case = n_n![a, a.signum()];
+    let trunc_case  = n_n![a, a.trunc()];
 
     let eq_case = nn_n![a, b, PdNum::Int(bi_iverson(a == b))];
     let lt_case = nn_n![a, b, PdNum::Int(bi_iverson(a < b))];
@@ -1899,7 +1913,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("Sg", cc![standard_deviation_case]);
 
     // FIXME
-    let to_int_case: Rc<dyn Case> = Rc::new(UnaryCase {
+    let string_to_int_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
         func: |_, s: &Rc<Vec<char>>| Ok(vec![PdObj::from(s.iter().collect::<String>().parse::<BigInt>().map_err(|_| PdError::BadParse)?)]),
     });
@@ -1907,7 +1921,7 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_block,
         func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]),
     });
-    add_cases("I", cc![to_int_case, iterate_case]);
+    add_cases("I", cc![trunc_case, string_to_int_case, iterate_case]);
 
     let replicate_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_any,
