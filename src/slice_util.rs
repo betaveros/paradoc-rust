@@ -1,3 +1,13 @@
+pub fn pythonic_mod_slice<T>(seq: &[T], modulus: isize) -> Option<Vec<&T>> {
+    if modulus > 0 {
+        Some(seq.iter().step_by(modulus as usize).collect())
+    } else if modulus < 0 {
+        Some(seq.iter().rev().step_by(-modulus as usize).collect())
+    } else {
+        None
+    }
+}
+
 pub fn split_slice<'a, 'b, T>(seq: &'a[T], size: usize, include_leftover: bool) -> Vec<&'a[T]> {
     let mut ret = Vec::new();
     for i in (0usize..seq.len()).step_by(size) {

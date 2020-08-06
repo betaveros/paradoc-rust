@@ -77,6 +77,14 @@ impl PdNum {
         }
     }
 
+    pub fn mul_const(&self, k: i32) -> PdNum {
+        match self {
+            PdNum::Int(n) => PdNum::Int(n * k),
+            PdNum::Char(c) => PdNum::Char(c * k),
+            PdNum::Float(f) => PdNum::Float(f * (k as f64)),
+        }
+    }
+
     pub fn is_nonzero(&self) -> bool {
         match self {
             PdNum::Int(i) => *i != BigInt::from(0),
@@ -124,6 +132,14 @@ impl PdNum {
             PdNum::Int(_) => false,
             PdNum::Float(f) => f.is_nan(),
             PdNum::Char(_) => false,
+        }
+    }
+
+    pub fn to_isize(&self) -> Option<isize> {
+        match self {
+            PdNum::Int(n) => n.to_isize(),
+            PdNum::Float(f) => f.trunc().to_isize(),
+            PdNum::Char(c) => c.to_isize(),
         }
     }
 
@@ -362,6 +378,11 @@ impl Div<&PdNum> for &PdNum {
 forward_impl_binary_method!(Div, div);
 
 impl Neg for PdNum {
+    type Output = PdNum;
+
+    fn neg(self) -> PdNum { -&self }
+}
+impl Neg for &PdNum {
     type Output = PdNum;
 
     fn neg(self) -> PdNum {

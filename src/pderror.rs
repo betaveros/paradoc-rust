@@ -7,6 +7,7 @@ pub enum PdError {
     BadList(&'static str),
     NumericError(&'static str),
     UnhashableBlock(String),
+    IndexError(String),
     BadComparison,
 }
 

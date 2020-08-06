@@ -69,3 +69,19 @@ fn stack_manip_trailer() {
     assert_eq!(paradoc::simple_eval("3 4 5+k" ), intvec![3, 4, 5, 9]);
     assert_eq!(paradoc::simple_eval("3 4 5+q" ), intvec![3, 9, 4, 5]);
 }
+
+#[test]
+fn comparison() {
+    assert_eq!(paradoc::simple_eval("3 3= 3 4= 4 3=" ), intvec![1, 0, 0]);
+    assert_eq!(paradoc::simple_eval("3 3< 3 4< 4 3<" ), intvec![0, 1, 0]);
+    assert_eq!(paradoc::simple_eval("3 3> 3 4> 4 3>" ), intvec![0, 0, 1]);
+}
+
+#[test]
+fn indexing() {
+    assert_eq!(paradoc::simple_eval("[3 1 4 1 5 9] 0=q;2=q;5=q;1m=q;6m="), intvec![3, 4, 9, 9, 3]);
+}
+#[test]
+fn slicing() {
+    assert_eq!(paradoc::simple_eval("[3 7 2 5]1<q>"), vec![list(intvec![3]), list(intvec![7, 2, 5])]);
+}

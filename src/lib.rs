@@ -427,6 +427,14 @@ fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
         _ => None,
     }
 }
+// TODO these should really PdError when they get a PdNum that fails
+// or maybe clamp or something, if we always use them that way? idk
+fn num_to_isize(obj: &PdObj) -> Option<isize> {
+    match obj {
+        PdObj::Num(n) => n.to_isize(),
+        _ => None,
+    }
+}
 fn num_to_nn_usize(obj: &PdObj) -> Option<usize> {
     match obj {
         PdObj::Num(n) => n.to_nn_usize(),
@@ -446,6 +454,33 @@ pub enum PdSeq {
     Range(BigInt, BigInt),
 }
 
+impl PdSeq {
+    fn to_rc_pd_obj(self) -> Rc<PdObj> {
+        match self {
+            PdSeq::List(rc) => Rc::new(PdObj::List(rc)),
+            PdSeq::String(s) => Rc::new(PdObj::String(s)),
+            PdSeq::Range(_, _) => Rc::new(PdObj::List(Rc::new(self.to_new_vec()))),
+            // PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| Rc::new(PdObj::from(x))).collect(),
+        }
+    }
+}
+
+pub enum PdSeqElement {
+    ListElement(Rc<PdObj>),
+    Char(char),
+    Int(BigInt),
+}
+
+impl PdSeqElement {
+    fn to_rc_pd_obj(self) -> Rc<PdObj> {
+        match self {
+            PdSeqElement::ListElement(rc) => rc,
+            PdSeqElement::Char(c) => Rc::new(PdObj::from(c)),
+            PdSeqElement::Int(n) => Rc::new(PdObj::from(n)),
+        }
+    }
+}
+
 pub enum PdIter<'a> {
     List(Iter<'a, Rc<PdObj>>),
     String(Iter<'a, char>), // String(std::str::Chars<'a>),
@@ -461,6 +496,76 @@ impl PdSeq {
         }
     }
 
+    fn len(&self) -> usize {
+        match self {
+            PdSeq::List(v) => v.len(),
+            PdSeq::String(s) => s.len(),
+            PdSeq::Range(a, b) => (b - a).to_usize().expect("obnoxious bigint range"),
+        }
+    }
+
+    fn index(&self, i: usize) -> Option<PdSeqElement> {
+        match self {
+            PdSeq::List(v) => v.get(i).map(|e| PdSeqElement::ListElement(Rc::clone(e))),
+            PdSeq::String(s) => s.get(i).map(|e| PdSeqElement::Char(*e)),
+            PdSeq::Range(a, b) => {
+                let guess = a + i;
+                if &guess < b {
+                    Some(PdSeqElement::Int(guess))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn pythonic_index(&self, i: isize) -> Option<PdSeqElement> {
+        if 0 <= i {
+            self.index(i as usize)
+        } else {
+            self.index((self.len() as isize + i) as usize)
+        }
+    }
+
+    fn pythonic_clamp_slice_index(&self, index: isize) -> usize {
+        let len = self.len();
+        if 0 <= index {
+            (index as usize).min(len)
+        } else {
+            let min_index = -(len as isize);
+            (len as isize + index.max(min_index)) as usize
+        }
+    }
+
+    fn pythonic_split_left(&self, index: isize) -> PdSeq {
+        let uindex = self.pythonic_clamp_slice_index(index);
+
+        match self {
+            PdSeq::List(v) => PdSeq::List(Rc::new(v.split_at(uindex).0.to_vec())),
+            PdSeq::String(s) => PdSeq::String(Rc::new(s.split_at(uindex).0.to_vec())),
+            PdSeq::Range(a, b) => PdSeq::Range(BigInt::clone(a), BigInt::clone(b.min(&(a + uindex)))),
+            //, PdSeq::Range(a + uindex, BigInt::clone(b))),
+        }
+    }
+
+    fn pythonic_mod_slice(&self, modulus: isize) -> PdResult<PdSeq> {
+        match self {
+            PdSeq::List(v) => Ok(PdSeq::List(Rc::new(slice_util::pythonic_mod_slice(&**v, modulus).ok_or(PdError::IndexError("mod slice sad".to_string()))?.iter().cloned().cloned().collect()))),
+            PdSeq::String(s) => Ok(PdSeq::String(Rc::new(slice_util::pythonic_mod_slice(&**s, modulus).ok_or(PdError::IndexError("mod slice sad".to_string()))?.iter().cloned().cloned().collect()))),
+            PdSeq::Range(_, _) => Ok(PdSeq::List(Rc::new(slice_util::pythonic_mod_slice(&self.to_new_vec(), modulus).ok_or(PdError::IndexError("mod slice sad".to_string()))?.iter().cloned().cloned().collect()))),
+        }
+    }
+
+    fn pythonic_split_right(&self, index: isize) -> PdSeq {
+        let uindex = self.pythonic_clamp_slice_index(index);
+
+        match self {
+            PdSeq::List(v) => PdSeq::List(Rc::new(v.split_at(uindex).1.to_vec())),
+            PdSeq::String(s) => PdSeq::String(Rc::new(s.split_at(uindex).1.to_vec())),
+            PdSeq::Range(a, b) => PdSeq::Range(a + uindex, BigInt::clone(b)),
+        }
+    }
+
     // TODO: expensive idk scary
     // it's probably fine but want to make sure it's necessary and I don't accidentally compose it
     // with additional clones
@@ -472,12 +577,11 @@ impl PdSeq {
         }
     }
 
-    // TODO same
-    fn first(&self) -> Option<Rc<PdObj>> {
+    fn first(&self) -> Option<PdSeqElement> {
         match self {
-            PdSeq::List(v) => v.first().map(Rc::clone),
-            PdSeq::String(s) => s.first().map(|x| Rc::new(PdObj::from(*x))),
-            PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(BigInt::clone(a)))) } else { None },
+            PdSeq::List(v) => Some(PdSeqElement::ListElement(Rc::clone(v.first()?))),
+            PdSeq::String(s) => Some(PdSeqElement::Char(*s.first()?)),
+            PdSeq::Range(a, b) => if a < b { Some(PdSeqElement::Int(BigInt::clone(a))) } else { None },
         }
     }
 
@@ -499,11 +603,11 @@ impl PdSeq {
         }
     }
 
-    fn last(&self) -> Option<Rc<PdObj>> {
+    fn last(&self) -> Option<PdSeqElement> {
         match self {
-            PdSeq::List(v) => v.last().map(Rc::clone),
-            PdSeq::String(s) => s.last().map(|x| Rc::new(PdObj::from(*x))),
-            PdSeq::Range(a, b) => if a < b { Some(Rc::new(PdObj::from(b - 1))) } else { None },
+            PdSeq::List(v) => Some(PdSeqElement::ListElement(Rc::clone(v.last()?))),
+            PdSeq::String(s) => Some(PdSeqElement::Char(*s.last()?)),
+            PdSeq::Range(a, b) => if a < b { Some(PdSeqElement::Int(b - 1)) } else { None },
         }
     }
 
@@ -843,6 +947,9 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::T
 
     match &**obj {
         PdObj::Num(n) => match trailer {
+            "m" | "minus" => { Ok((Rc::new(PdObj::from(-&**n)), false)) }
+            "h" | "hundred" => { Ok((Rc::new(PdObj::from(n.mul_const(100))), false)) }
+            "k" | "thousand" => { Ok((Rc::new(PdObj::from(n.mul_const(1000))), false)) }
             "p" | "power" => {
                 let exponent: PdNum = PdNum::clone(n);
                 Ok((Rc::new(PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
@@ -1200,6 +1307,7 @@ pub fn initialize(env: &mut Environment) {
     let ceil_case  = n_n![a, a.ceil()];
     let floor_case = n_n![a, a.floor()];
 
+    let eq_case = nn_n![a, b, PdNum::Int(bi_iverson(a == b))];
     let lt_case = nn_n![a, b, PdNum::Int(bi_iverson(a < b))];
     let gt_case = nn_n![a, b, PdNum::Int(bi_iverson(a > b))];
     let min_case = nn_n![a, b, PdNum::clone(a.min(b))];
@@ -1246,14 +1354,14 @@ pub fn initialize(env: &mut Environment) {
         let (x, xs) = a.split_first().ok_or(PdError::BadList("Uncons of empty list"))?;
         Ok(vec![xs, x])
     });
-    let first_case = unary_seq_range_case(|_, a| { Ok(vec![a.first().ok_or(PdError::BadList("First of empty list"))?]) });
+    let first_case = unary_seq_range_case(|_, a| { Ok(vec![a.first().ok_or(PdError::BadList("First of empty list"))?.to_rc_pd_obj() ]) });
     let rest_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_first().ok_or(PdError::BadList("Rest of empty list"))?.1]) });
 
     let unsnoc_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_last().ok_or(PdError::BadList("Unsnoc of empty list"))?;
         Ok(vec![xs, x])
     });
-    let last_case = unary_seq_range_case(|_, a| { Ok(vec![a.last().ok_or(PdError::BadList("Last of empty list"))?]) });
+    let last_case = unary_seq_range_case(|_, a| { Ok(vec![a.last().ok_or(PdError::BadList("Last of empty list"))?.to_rc_pd_obj() ]) });
     let butlast_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_last().ok_or(PdError::BadList("Butlast of empty list"))?.1]) });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
@@ -1275,6 +1383,34 @@ pub fn initialize(env: &mut Environment) {
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
+    let index_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_isize,
+        func: |_, seq, index| {
+            Ok(vec![seq.pythonic_index(*index).ok_or(PdError::IndexError(index.to_string()))?.to_rc_pd_obj()])
+        },
+    });
+    let lt_slice_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_isize,
+        func: |_, seq, index| {
+            Ok(vec![seq.pythonic_split_left(*index).to_rc_pd_obj()])
+        },
+    });
+    let mod_slice_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_isize,
+        func: |_, seq, index| {
+            Ok(vec![seq.pythonic_mod_slice(*index)?.to_rc_pd_obj()])
+        },
+    });
+    let ge_slice_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_isize,
+        func: |_, seq, index| {
+            Ok(vec![seq.pythonic_split_right(*index).to_rc_pd_obj()])
+        },
+    });
     let seq_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
         coerce2: num_to_nn_usize,
@@ -1301,12 +1437,13 @@ pub fn initialize(env: &mut Environment) {
     add_cases("-", cc![minus_case]);
     add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
-    add_cases("%", cc![mod_case, map_case]);
+    add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
-    add_cases("<", cc![lt_case]);
-    add_cases(">", cc![gt_case]);
+    add_cases("=", cc![eq_case, index_case]);
+    add_cases("<", cc![lt_case, lt_slice_case]);
+    add_cases(">", cc![gt_case, ge_slice_case]);
     add_cases("<m", cc![min_case]);
     add_cases(">m", cc![max_case]);
     add_cases("Õ", cc![min_case]);
