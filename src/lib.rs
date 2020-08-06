@@ -15,6 +15,7 @@ mod lex;
 mod pdnum;
 mod pderror;
 mod input;
+mod vecutil;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
@@ -423,6 +424,12 @@ impl Case for TernaryAnyCase {
 fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
     match obj {
         PdObj::Num(n) => Some(Rc::clone(n)),
+        _ => None,
+    }
+}
+fn just_string(obj: &PdObj) -> Option<Rc<Vec<char>>> {
+    match obj {
+        PdObj::String(s) => Some(Rc::clone(s)),
         _ => None,
     }
 }
@@ -1258,10 +1265,18 @@ pub fn initialize(env: &mut Environment) {
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
+    let str_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_string,
+        coerce2: just_string,
+        func: |_, seq, tok| {
+            Ok(vec![Rc::new(PdObj::List(Rc::new(vecutil::split_vec_by(seq, tok).iter().map(|s| Rc::new(PdObj::String(Rc::new(s.to_vec())))).collect())))])
+        },
+    });
+
     add_cases("+", cc![plus_case]);
     add_cases("-", cc![minus_case]);
     add_cases("*", cc![times_case]);
-    add_cases("/", cc![div_case]);
+    add_cases("/", cc![div_case, str_split_case]);
     add_cases("%", cc![mod_case, map_case]);
     add_cases("÷", cc![intdiv_case]);
     add_cases("(", cc![dec_case, uncons_case]);
