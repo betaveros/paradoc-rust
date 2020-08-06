@@ -1010,6 +1010,15 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer0: &lex::T
                 env.extend(temp);
                 Ok(())
             }),
+            "d" | "double" => obb("double", bb, |env, body| {
+                let res = env.run_on_bracketed_shadow(ShadowType::Normal, |inner| {
+                    body.run(inner)?;
+                    Ok(inner.take_stack())
+                })?;
+                body.run(env)?;
+                env.extend(res);
+                Ok(())
+            }),
             "š" | "sum" => obb("sum", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "sum")?;
                 let res = pd_flat_fold(env, body, PdNum::from(0),
