@@ -961,15 +961,17 @@ fn lookup_and_break_trailers<'a, 'b>(env: &'a Environment, leader: &str, trailer
 impl Block for CodeBlock {
     fn run(&self, mut env: &mut Environment) -> PdUnit {
         for init_trailer in &self.0 {
-            match init_trailer.0.as_ref() {
-                "i" | "_i" | "_input" => { env.input_trigger = Some(InputTrigger::All); }
-                "l" | "_l" | "_line" => { env.input_trigger = Some(InputTrigger::Line); }
-                "w" | "_w" | "_word" => { env.input_trigger = Some(InputTrigger::Word); }
-                "v" | "_v" | "_values" => { env.input_trigger = Some(InputTrigger::Value); }
-                "r" | "_r" | "_record" => { env.input_trigger = Some(InputTrigger::Record); }
-                "a" | "_a" | "_linearray" => { env.input_trigger = Some(InputTrigger::AllLines); }
-                "y" | "_y" | "_valuearray" => { env.input_trigger = Some(InputTrigger::AllValues); }
-                "q" | "_q" | "_recordarray" => { env.input_trigger = Some(InputTrigger::AllRecords); }
+            let mut trailer: &str = init_trailer.0.as_ref();
+            trailer = trailer.strip_prefix('_').unwrap_or(trailer);
+            match trailer {
+                "i" | "input"       => { env.input_trigger = Some(InputTrigger::All       ); }
+                "l" | "line"        => { env.input_trigger = Some(InputTrigger::Line      ); }
+                "w" | "word"        => { env.input_trigger = Some(InputTrigger::Word      ); }
+                "v" | "values"      => { env.input_trigger = Some(InputTrigger::Value     ); }
+                "r" | "record"      => { env.input_trigger = Some(InputTrigger::Record    ); }
+                "a" | "linearray"   => { env.input_trigger = Some(InputTrigger::AllLines  ); }
+                "y" | "valuearray"  => { env.input_trigger = Some(InputTrigger::AllValues ); }
+                "q" | "recordarray" => { env.input_trigger = Some(InputTrigger::AllRecords); }
                 _ => { panic!("unsupported init trailer"); }
             }
         }
