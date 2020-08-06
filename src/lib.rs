@@ -284,7 +284,7 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<Rc<PdObj>>) ->
 }
 #[derive(Debug)]
 pub enum PdObj {
-    Num(PdNum),
+    Num(Rc<PdNum>),
     String(Rc<Vec<char>>),
     List(Rc<Vec<Rc<PdObj>>>),
     Block(Rc<dyn Block>),
@@ -312,10 +312,16 @@ impl PartialOrd for PdObj {
     }
 }
 
+impl From<PdNum> for PdObj {
+    fn from(s: PdNum) -> Self {
+        PdObj::Num(Rc::new(s))
+    }
+}
+
 macro_rules! forward_from {
     ($ty:ident) => {
         impl From<$ty> for PdObj {
-            fn from(n: $ty) -> Self { PdObj::Num(PdNum::from(n)) }
+            fn from(n: $ty) -> Self { PdObj::Num(Rc::new(PdNum::from(n))) }
         }
     }
 }
@@ -408,9 +414,9 @@ impl Case for TernaryAnyCase {
     }
 }
 
-fn just_num(obj: &PdObj) -> Option<PdNum> {
+fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
     match obj {
-        PdObj::Num(n) => Some(n.clone()),
+        PdObj::Num(n) => Some(Rc::clone(n)),
         _ => None,
     }
 }
@@ -522,7 +528,10 @@ fn just_seq(obj: &PdObj) -> Option<PdSeq> {
 }
 fn seq_range(obj: &PdObj) -> Option<PdSeq> {
     match obj {
-        PdObj::Num(PdNum::Int(a)) => Some(PdSeq::Range(BigInt::from(0), BigInt::clone(a))),
+        PdObj::Num(num) => match &**num {
+            PdNum::Int(a) => Some(PdSeq::Range(BigInt::from(0), BigInt::clone(a))),
+            _ => None,
+        },
         _ => just_seq(obj),
     }
 }
@@ -541,8 +550,8 @@ impl Case for UnaryNumCase {
     fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<Rc<PdObj>>) -> PdResult<Option<Vec<Rc<PdObj>>>> {
         match &*args[0] {
             PdObj::Num(ai) => {
-                let ai2 = ai.clone();
-                Ok(Some((self.func)(env, &ai2)?))
+                let ai2 = Rc::clone(ai);
+                Ok(Some((self.func)(env, &*ai2)?))
             }
             _ => Ok(None)
         }
@@ -564,7 +573,7 @@ impl<T> Case for UnaryCase<T> {
         }
     }
 }
-fn unary_num_case(func: fn(&mut Environment, &PdNum) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+fn unary_num_case(func: fn(&mut Environment, &Rc<PdNum>) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: just_num, func })
 }
 
@@ -584,7 +593,7 @@ impl<T1, T2> Case for BinaryCase<T1, T2> {
         }
     }
 }
-fn binary_num_case(func: fn(&mut Environment, &PdNum, &PdNum) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+fn binary_num_case(func: fn(&mut Environment, &Rc<PdNum>, &Rc<PdNum>) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
     Rc::new(BinaryCase { coerce1: just_num, coerce2: just_num, func })
 }
 fn unary_seq_range_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
@@ -865,14 +874,14 @@ fn apply_trailer(outer_env: &mut Environment, obj: &Rc<PdObj>, trailer: &lex::Tr
                 let seq = pop_seq_range_for(env, "sum")?;
                 let res = pd_flat_fold(env, body, PdNum::from(0),
                     |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
-                env.push(Rc::new(PdObj::Num(res)));
+                env.push(Rc::new(PdObj::from(res)));
                 Ok(())
             }),
             "â" | "_â" | "_all" => obb("all", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "all")?;
                 let res = pd_flat_fold_with_short_circuit(env, body, true,
                     |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
-                env.push(Rc::new(PdObj::Num(PdNum::Int(bi_iverson(res)))));
+                env.push(Rc::new(PdObj::from(bi_iverson(res))));
                 Ok(())
             }),
             "v" | "_v" | "_bindmap" | "_vectorize" => obb("all", bb, |env, body| {
@@ -978,12 +987,19 @@ fn apply_on(env: &mut Environment, obj: Rc<PdObj>) -> PdUnit {
 
 macro_rules! n_n {
     ($a:ident, $x:expr) => {
-        unary_num_case(|_, $a| Ok(vec![Rc::new(PdObj::Num($x))]))
+        unary_num_case(|_, a| {
+            let $a: &PdNum = a;
+            Ok(vec![Rc::new(PdObj::from($x))])
+        })
     };
 }
 macro_rules! nn_n {
     ($a:ident, $b:ident, $x:expr) => {
-        binary_num_case(|_, $a, $b| Ok(vec![Rc::new(PdObj::Num($x))]))
+        binary_num_case(|_, a, b| {
+            let $a: &PdNum = &**a;
+            let $b: &PdNum = &**b;
+            Ok(vec![Rc::new(PdObj::from($x))])
+        })
     };
 }
 
@@ -1009,7 +1025,7 @@ fn pd_deep_length(x: &PdObj) -> PdResult<usize> {
 
 fn pd_deep_sum(x: &PdObj) -> PdResult<PdNum> {
     match x {
-        PdObj::Num(n) => Ok(n.clone()),
+        PdObj::Num(n) => Ok((&**n).clone()),
         PdObj::String(ss) => Ok(PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32)).sum())),
         PdObj::List(v) => v.iter().map(|x| pd_deep_sum(&*x)).sum(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep sum can't block".to_string())),
@@ -1018,7 +1034,7 @@ fn pd_deep_sum(x: &PdObj) -> PdResult<PdNum> {
 
 fn pd_deep_square_sum(x: &PdObj) -> PdResult<PdNum> {
     match x {
-        PdObj::Num(n) => Ok(n * n),
+        PdObj::Num(n) => Ok(&**n * &**n),
         PdObj::String(ss) => Ok(PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32).pow(2u32)).sum())),
         PdObj::List(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep square sum can't block".to_string())),
@@ -1034,7 +1050,7 @@ fn pd_deep_standard_deviation(x: &PdObj) -> PdResult<PdNum> {
 
 fn pd_deep_product(x: &PdObj) -> PdResult<PdNum> {
     match x {
-        PdObj::Num(n) => Ok(n.clone()),
+        PdObj::Num(n) => Ok((&**n).clone()),
         PdObj::String(ss) => Ok(PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32)).product())),
         PdObj::List(v) => v.iter().map(|x| pd_deep_product(&*x)).product(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep product can't block".to_string())),
@@ -1053,7 +1069,7 @@ fn pd_build_if_string(x: Vec<PdNum>) -> PdObj {
     if char_ok {
         PdObj::from(chars)
     } else {
-        PdObj::List(Rc::new(x.iter().map(|e| Rc::new(PdObj::Num(PdNum::clone(e)))).collect()))
+        PdObj::List(Rc::new(x.iter().map(|e| Rc::new(PdObj::Num(Rc::new(e.clone())))).collect()))
     }
 }
 
@@ -1121,7 +1137,7 @@ pub fn initialize(env: &mut Environment) {
         }
     });
 
-    let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![Rc::new(PdObj::Num(a * a))]) });
+    let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(a * a))]) });
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![Rc::new(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
@@ -1183,19 +1199,19 @@ pub fn initialize(env: &mut Environment) {
     let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(bi_iverson(!pd_truthy(a))))]) });
     add_cases("!", cc![not_case]);
 
-    let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::Num(pd_deep_sum(a)?))]) });
+    let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_sum(a)?))]) });
     add_cases("Š", cc![sum_case]);
 
-    let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::Num(pd_deep_product(a)?))]) });
+    let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_product(a)?))]) });
     add_cases("Þ", cc![product_case]);
 
-    let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::Num(pd_deep_sum(a)? / PdNum::Float(pd_deep_length(a)? as f64)))]) });
+    let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_sum(a)? / PdNum::Float(pd_deep_length(a)? as f64)))]) });
     add_cases("Av", cc![average_case]);
 
-    let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::Num(pd_deep_square_sum(a)?.sqrt().ok_or(PdError::NumericError("sqrt in hypotenuse failed"))?))]) });
+    let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_square_sum(a)?.sqrt().ok_or(PdError::NumericError("sqrt in hypotenuse failed"))?))]) });
     add_cases("Hy", cc![hypotenuse_case]);
 
-    let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::Num(pd_deep_standard_deviation(a)?))]) });
+    let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_standard_deviation(a)?))]) });
     add_cases("Sg", cc![standard_deviation_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::Int(3.to_bigint().unwrap())));
@@ -1204,7 +1220,7 @@ pub fn initialize(env: &mut Environment) {
     env.short_insert("¹", PdObj::from(11));
     env.short_insert("∅", PdObj::from(0));
     env.short_insert("α", PdObj::from(1));
-    env.short_insert("Ep", PdObj::Num(PdNum::Float(1e-9)));
+    env.short_insert("Ep", PdObj::from(1e-9));
 
     env.short_insert(" ", PdObj::Block(Rc::new(BuiltIn {
         name: "Nop".to_string(),
