@@ -7,6 +7,7 @@ pub enum PdError {
     BadList(&'static str),
     NumericError(&'static str),
     UnhashableBlock(String),
+    BadComparison,
 }
 
 pub type PdResult<T> = Result<T, PdError>;

@@ -602,6 +602,9 @@ impl<T1, T2> Case for BinaryCase<T1, T2> {
 fn binary_num_case(func: fn(&mut Environment, &Rc<PdNum>, &Rc<PdNum>) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
     Rc::new(BinaryCase { coerce1: just_num, coerce2: just_num, func })
 }
+fn unary_seq_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
+    Rc::new(UnaryCase { coerce: just_seq, func })
+}
 fn unary_seq_range_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<Rc<PdObj>>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: seq_range, func })
 }
@@ -1115,7 +1118,7 @@ fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PdKey {
     Num(PdTotalNum),
     String(Rc<Vec<char>>),
@@ -1185,6 +1188,43 @@ pub fn initialize(env: &mut Environment) {
     let min_case = nn_n![a, b, PdNum::clone(a.min(b))];
     let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
+    let min_seq_case = unary_seq_case(|_, a: &PdSeq| {
+        let mut best: Option<Rc<PdObj>> = None;
+        // i don't think i can simplify this easily because of the inner return Err
+        for obj in a.iter() {
+            match best {
+                None => { best = Some(obj); }
+                Some(old) => {
+                    best = Some(match obj.partial_cmp(&old) {
+                        Some(Ordering::Less) => obj,
+                        Some(Ordering::Equal) => old,
+                        Some(Ordering::Greater) => old,
+                        None => { return Err(PdError::BadComparison); }
+                    })
+                }
+            }
+        }
+        Ok(vec![best.ok_or(PdError::BadList("Min of empty list"))?])
+    });
+    let max_seq_case = unary_seq_case(|_, a: &PdSeq| {
+        let mut best: Option<Rc<PdObj>> = None;
+        // i don't think i can simplify this easily because of the inner return Err
+        for obj in a.iter() {
+            match best {
+                None => { best = Some(obj); }
+                Some(old) => {
+                    best = Some(match obj.partial_cmp(&old) {
+                        Some(Ordering::Less) => old,
+                        Some(Ordering::Equal) => obj,
+                        Some(Ordering::Greater) => obj,
+                        None => { return Err(PdError::BadComparison); }
+                    })
+                }
+            }
+        }
+        Ok(vec![best.ok_or(PdError::BadList("Min of empty list"))?])
+    });
+
     let uncons_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_first().ok_or(PdError::BadList("Uncons of empty list"))?;
         Ok(vec![xs, x])
@@ -1232,6 +1272,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases(">m", cc![max_case]);
     add_cases("Õ", cc![min_case]);
     add_cases("Ã", cc![max_case]);
+    add_cases("<r", cc![min_seq_case]);
+    add_cases(">r", cc![max_seq_case]);
+    add_cases("Œ", cc![min_seq_case]);
+    add_cases("Æ", cc![max_seq_case]);
     add_cases("‹", cc![floor_case, first_case]);
     add_cases("›", cc![ceil_case, last_case]);
     add_cases("«", cc![dec2_case, butlast_case]);
