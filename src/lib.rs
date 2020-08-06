@@ -682,6 +682,15 @@ fn just_seq(obj: &PdObj) -> Option<PdSeq> {
         _ => None,
     }
 }
+// TODO: hrmm do we want to make this take Rc<PdObj>
+// honestly we should just get rid of that extra Rc, it's pretty wasteful
+fn list_singleton(obj: &PdObj) -> Option<Rc<Vec<Rc<PdObj>>>> {
+    match obj {
+        PdObj::Num(n) => Some(Rc::new(vec![Rc::new(PdObj::from(PdNum::clone(&**n)))])),
+        PdObj::List(x) => Some(Rc::clone(x)),
+        _ => None,
+    }
+}
 fn seq_range(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::Num(num) => match &**num {
@@ -1635,6 +1644,19 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_list(slice_util::split_slice_by(seq.to_new_vec().as_slice(), tok.to_new_vec().as_slice()).iter().map(|s| pd_list(s.to_vec())).collect())])
         },
     });
+
+    let cat_list_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: list_singleton,
+        coerce2: list_singleton,
+        func: |_, seq1: &Rc<Vec<Rc<PdObj>>>, seq2: &Rc<Vec<Rc<PdObj>>>| {
+            let mut v = Vec::new();
+            v.extend((&**seq1).iter().cloned());
+            v.extend((&**seq2).iter().cloned());
+
+            Ok(vec![Rc::new(PdObj::List(Rc::new(v)))])
+        },
+    });
+
     let intersection_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
@@ -1664,7 +1686,7 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
-    add_cases("+", cc![plus_case]);
+    add_cases("+", cc![plus_case, cat_list_case]);
     add_cases("-", cc![minus_case, set_difference_case]);
     add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
