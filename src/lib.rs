@@ -15,7 +15,7 @@ mod lex;
 mod pdnum;
 mod pderror;
 mod input;
-mod vecutil;
+mod slice_util;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
@@ -1269,7 +1269,7 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_string,
         coerce2: just_string,
         func: |_, seq, tok| {
-            Ok(vec![Rc::new(PdObj::List(Rc::new(vecutil::split_vec_by(seq, tok).iter().map(|s| Rc::new(PdObj::String(Rc::new(s.to_vec())))).collect())))])
+            Ok(vec![Rc::new(PdObj::List(Rc::new(slice_util::split_slice_by(seq.as_slice(), tok.as_slice()).iter().map(|s| Rc::new(PdObj::String(Rc::new(s.to_vec())))).collect())))])
         },
     });
 

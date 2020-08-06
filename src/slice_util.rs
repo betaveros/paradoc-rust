@@ -1,4 +1,4 @@
-pub fn split_vec_by<'a, 'b, T>(seq: &'a Vec<T>, tok: &'b Vec<T>) -> Vec<&'a [T]> where T: Eq {
+pub fn split_slice_by<'a, 'b, T>(seq: &'a[T], tok: &'b[T]) -> Vec<&'a[T]> where T: Eq {
     let mut i = 0usize;
     let mut cur_start = 0usize;
     let seqlen = seq.len();
@@ -6,9 +6,9 @@ pub fn split_vec_by<'a, 'b, T>(seq: &'a Vec<T>, tok: &'b Vec<T>) -> Vec<&'a [T]>
     let mut ret = Vec::new();
     loop {
         if i + toklen > seqlen {
-            ret.push(&seq[cur_start..]);
+            ret.push(&seq[i..]);
             break ret
-        } else if &seq[i..i+toklen] == tok.as_slice() {
+        } else if &seq[i..i+toklen] == tok {
             ret.push(&seq[cur_start..i]);
             i += toklen;
             cur_start = i
