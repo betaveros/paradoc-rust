@@ -556,6 +556,14 @@ impl PdSeq {
         }
     }
 
+    fn rev_copy(&self) -> PdSeq {
+        match self {
+            PdSeq::List(v)     => PdSeq::List  (Rc::new(slice_util::rev_copy(&**v).iter().cloned().cloned().collect())),
+            PdSeq::String(s)   => PdSeq::String(Rc::new(slice_util::rev_copy(&**s).iter().cloned().cloned().collect())),
+            PdSeq::Range(_, _) => PdSeq::List  (Rc::new(slice_util::rev_copy(&self.to_new_vec()).iter().cloned().cloned().collect())),
+        }
+    }
+
     fn pythonic_split_right(&self, index: isize) -> PdSeq {
         let uindex = self.pythonic_clamp_slice_index(index);
 
@@ -1304,8 +1312,11 @@ pub fn initialize(env: &mut Environment) {
     let inc2_case  = n_n![a, a.add_const( 2)];
     let dec2_case  = n_n![a, a.add_const(-2)];
 
-    let ceil_case  = n_n![a, a.ceil()];
-    let floor_case = n_n![a, a.floor()];
+    let ceil_case   = n_n![a, a.ceil()];
+    let floor_case  = n_n![a, a.floor()];
+    let abs_case    = n_n![a, a.abs()];
+    let neg_case    = n_n![a, -a];
+    let signum_case = n_n![a, a.signum()];
 
     let eq_case = nn_n![a, b, PdNum::Int(bi_iverson(a == b))];
     let lt_case = nn_n![a, b, PdNum::Int(bi_iverson(a < b))];
@@ -1390,6 +1401,16 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![seq.pythonic_index(*index).ok_or(PdError::IndexError(index.to_string()))?.to_rc_pd_obj()])
         },
     });
+    let len_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| { Ok(vec![Rc::new(PdObj::from(seq.len()))]) },
+    });
+    let down_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: seq_range,
+        func: |_, seq| {
+            Ok(vec![seq.rev_copy().to_rc_pd_obj()])
+        },
+    });
     let lt_slice_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
         coerce2: num_to_isize,
@@ -1450,6 +1471,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases("Ã", cc![max_case]);
     add_cases("<r", cc![min_seq_case]);
     add_cases(">r", cc![max_seq_case]);
+    add_cases("D", cc![down_case]);
+    add_cases("L", cc![abs_case, len_case]);
+    add_cases("M", cc![neg_case]);
+    add_cases("U", cc![signum_case]);
     add_cases("Œ", cc![min_seq_case]);
     add_cases("Æ", cc![max_seq_case]);
     add_cases("‹", cc![floor_case, first_case]);

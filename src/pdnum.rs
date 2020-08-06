@@ -9,6 +9,7 @@ use num::Integer;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
 use num_traits::pow::Pow;
+use num_traits::sign::Signed;
 use num_traits::cast::ToPrimitive;
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,34 @@ impl PdNum {
             PdNum::Int(_) => self.clone(),
             PdNum::Char(_) => self.clone(),
             PdNum::Float(f) => PdNum::Int(f.floor().to_bigint().expect("Floor of float was not integer")),
+        }
+    }
+
+    pub fn abs(&self) -> PdNum {
+        match self {
+            PdNum::Int(k) => PdNum::Int(k.abs()),
+            PdNum::Char(k) => PdNum::Char(k.abs()),
+            PdNum::Float(f) => PdNum::Float(f.abs()),
+        }
+    }
+
+    pub fn signum(&self) -> PdNum {
+        match self {
+            PdNum::Int(k) => PdNum::Int(k.signum()),
+            PdNum::Char(k) => PdNum::Char(k.signum()),
+            PdNum::Float(f) => {
+                // This is NOT Rust's f64's signum. We want +/-0 to give 0 (for consistency with
+                // integers)
+                if f.is_nan() {
+                    PdNum::Float(*f)
+                } else if *f == 0.0 {
+                    PdNum::from(0)
+                } else if *f > 0.0 {
+                    PdNum::from(1)
+                } else {
+                    PdNum::from(-1)
+                }
+            }
         }
     }
 

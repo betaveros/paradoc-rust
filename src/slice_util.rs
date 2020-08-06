@@ -1,3 +1,5 @@
+pub fn rev_copy<T>(seq: &[T]) -> Vec<&T> { seq.iter().rev().collect() }
+
 pub fn pythonic_mod_slice<T>(seq: &[T], modulus: isize) -> Option<Vec<&T>> {
     if modulus > 0 {
         Some(seq.iter().step_by(modulus as usize).collect())
