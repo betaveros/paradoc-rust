@@ -1923,6 +1923,9 @@ pub fn initialize(env: &mut Environment) {
     });
     add_cases("I", cc![trunc_case, string_to_int_case, iterate_case]);
 
+    let to_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| Ok(vec![PdObj::from(env.to_string(a))]) });
+    add_cases("S", cc![to_string_case]);
+
     let replicate_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_any,
         coerce2: num_to_clamped_usize,
