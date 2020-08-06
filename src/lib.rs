@@ -9,13 +9,13 @@ use num_iter;
 use num::bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
-use std::collections::HashMap;
+use std::collections::{HashSet, HashMap};
 
 mod lex;
 mod pdnum;
 mod pderror;
 mod input;
-use crate::pdnum::PdNum;
+use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
 
@@ -111,7 +111,7 @@ impl Environment {
             }
         }
     }
-    fn pop_result(&mut self, err_msg: &str) -> Result<Rc<PdObj>, PdError> {
+    fn pop_result(&mut self, err_msg: &str) -> PdResult<Rc<PdObj>> {
         self.pop().ok_or(PdError::EmptyStack(err_msg.to_string()))
     }
     fn pop_n_result(&mut self, n: usize, err_msg: &str) -> Result<Vec<Rc<PdObj>>, PdError> {
@@ -120,6 +120,12 @@ impl Environment {
             ret.push(self.pop_result(err_msg)?);
         }
         ret.reverse();
+        Ok(ret)
+    }
+
+    fn peek_result(&mut self, err_msg: &str) -> PdResult<Rc<PdObj>> {
+        let ret = self.pop_result(err_msg)?;
+        self.push(Rc::clone(&ret));
         Ok(ret)
     }
 
@@ -1077,10 +1083,56 @@ fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
     where F: Fn(&PdNum) -> PdNum {
 
     match x {
-        PdObj::Num(n) => PdObj::Num(f(n)),
+        PdObj::Num(n) => PdObj::Num(Rc::new(f(&*n))),
         PdObj::String(s) => pd_build_if_string(s.iter().map(|c| f(&PdNum::from(*c))).collect()),
         PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| Rc::new(pd_deep_map(f, &*e))).collect())),
         _ => { panic!("wtf not deep"); }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub enum PdKey {
+    Num(PdTotalNum),
+    String(Rc<Vec<char>>),
+    List(Rc<Vec<Rc<PdKey>>>),
+}
+
+fn pd_key(obj: &PdObj) -> PdResult<PdKey> {
+    match obj {
+        PdObj::Num(x) => Ok(PdKey::Num(PdTotalNum(Rc::clone(x)))),
+        PdObj::String(x) => Ok(PdKey::String(Rc::clone(x))),
+        PdObj::List(x) => Ok(PdKey::List(Rc::new(x.iter().map(|k| Ok(Rc::new(pd_key(&**k)?))).collect::<PdResult<Vec<Rc<PdKey>>>>()?))),
+        PdObj::Block(b) => Err(PdError::UnhashableBlock(b.code_repr())),
+    }
+}
+
+/*
+pub enum PdObj {
+    Num(PdNum),
+    String(Rc<Vec<char>>),
+    List(Rc<Vec<Rc<PdObj>>>),
+    Block(Rc<dyn Block>),
+}
+*/
+
+// """Iterate a block, peeking at the stack top at the start and after each
+// iteration, until a value repeats. Pop that value. Returns the list of (all
+// distinct) elements peeked along the way and the final repeated value."""
+fn pd_iterate(env: &mut Environment, func: &Rc<dyn Block>) -> PdResult<(Vec<Rc<PdObj>>, Rc<PdObj>)> {
+    let mut acc: Vec<Rc<PdObj>> = Vec::new();
+    let mut seen: HashSet<PdKey> = HashSet::new();
+
+    loop {
+        let obj = env.peek_result("iterate nothing to peek")?;
+        let key = pd_key(&*obj)?;
+        if seen.contains(&key) {
+            env.pop_result("iterate final pop shouldn't fail lmao?")?;
+            return Ok((acc, obj))
+        }
+
+        acc.push(obj);
+        seen.insert(key);
+        func.run(env)?;
     }
 }
 
@@ -1213,6 +1265,9 @@ pub fn initialize(env: &mut Environment) {
 
     let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![Rc::new(PdObj::from(pd_deep_standard_deviation(a)?))]) });
     add_cases("Sg", cc![standard_deviation_case]);
+
+    let iterate_case: Rc<dyn Case> = Rc::new(UnaryCase { func: |env, block| Ok(vec![Rc::new(PdObj::List(Rc::new(pd_iterate(env, block)?.0)))]), coerce: just_block });
+    add_cases("I", cc![iterate_case]);
 
     // env.variables.insert("X".to_string(), Rc::new(PdObj::Int(3.to_bigint().unwrap())));
     env.short_insert("N", PdObj::from('\n'));

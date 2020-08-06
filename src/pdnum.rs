@@ -1,7 +1,9 @@
+use std::rc::Rc;
 use std::cmp::Ordering;
-use std::ops::{Add, Sub, Mul, Div, Rem, Neg};
+use std::ops::{Add, Sub, Mul, Div, Rem, Neg, Deref};
 use std::ops::AddAssign;
 use std::iter::{Sum, Product};
+use std::hash::{Hash, Hasher};
 use std::mem;
 use num::Integer;
 use num::bigint::BigInt;
@@ -203,6 +205,57 @@ impl PdNum {
             (PdNum::Char  (a), PdNum::Int   (b)) => a.cmp(b),
             (PdNum::Char  (a), PdNum::Float (b)) => cmp_bigint_f64(a, b).unwrap_or(Ordering::Less),
             (PdNum::Char  (a), PdNum::Char  (b)) => a.cmp(b),
+        }
+    }
+}
+
+
+// Tries to follow the laws
+#[derive(Debug, Clone)]
+pub struct PdTotalNum(pub Rc<PdNum>);
+
+impl Deref for PdTotalNum {
+    type Target = Rc<PdNum>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// Considers NaNs equal
+impl PartialEq for PdTotalNum {
+    fn eq(&self, other: &Self) -> bool {
+        PdNum::eq(&**self, &**other) || self.is_nan() && other.is_nan()
+    }
+}
+
+impl Eq for PdTotalNum {}
+
+impl Ord for PdTotalNum {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.total_cmp_small_nan(&**other)
+    }
+}
+impl PartialOrd for PdTotalNum {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+
+impl Hash for PdTotalNum {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &***self {
+            PdNum::Int(a) => BigInt::hash(a, state),
+            PdNum::Char(c) => BigInt::hash(c, state),
+            PdNum::Float(f) => match f.to_bigint() {
+                Some(s) => BigInt::hash(&s, state),
+                None => if f.is_nan() {
+                    // some nan from wikipedia (not that this matters)
+                    state.write_u64(0x7FF0000000000001u64)
+                } else {
+                    // I *think* this actually obeys the laws...?
+                    // (+/- 0 are handled by the bigint branch)
+                    f.to_bits().hash(state)
+                }
+            }
         }
     }
 }
