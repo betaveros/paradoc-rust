@@ -855,6 +855,28 @@ impl Block for DeepBinaryOpBlock {
     }
 }
 
+struct DeepZipBlock {
+    func: fn(&PdNum, &PdNum) -> PdNum,
+    name: String,
+}
+impl Debug for DeepZipBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "DeepBinaryOpBlock {{ func: ???, name: {:?} }}", self.name)
+    }
+}
+impl Block for DeepZipBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let b = env.pop_result("deep binary op no stack")?;
+        let a = env.pop_result("deep binary op no stack")?;
+        let res = pd_deep_zip(&self.func, &a, &b);
+        env.push(res);
+        Ok(())
+    }
+    fn code_repr(&self) -> String {
+        String::clone(&self.name) + "_deep_zip"
+    }
+}
+
 // TODO: handle continue/break (have fun!) (this should be fine now)
 // doesn't push and pop yx
 // The inner function returns true to break out of the loop.
@@ -881,6 +903,26 @@ fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<V
     let mut acc = Vec::new();
     pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(false) }, it)?;
     Ok(acc)
+}
+
+// TODO: wot, this isn't an xy loop in Paradoc proper?
+fn pd_scan(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
+    let mut acc: Option<PdObj> = None;
+    let mut ret: Vec<PdObj> = Vec::new();
+
+    for e in it {
+        let cur = match acc {
+            None => e,
+            Some(a) => {
+                // pop consumes the sandbox result since we don't use it any more
+                sandbox(env, func, vec![a, e])?.pop().ok_or(PdError::EmptyReduceIntermediate)?
+            }
+        };
+        ret.push(PdObj::clone(&cur));
+        acc = Some(cur);
+    }
+
+    Ok(ret)
 }
 
 // TODO: I don't think F should need to borrow &B, but it's tricky.
@@ -1124,6 +1166,18 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(pd_list(res));
                 Ok(())
             }),
+            "s" | "scan" => obb("scan", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "scan")?;
+                let res = pd_scan(env, body, seq.iter())?;
+                env.push(pd_list(res));
+                Ok(())
+            }),
+            "w" | "deepmap" => obb("deepmap", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "map")?.to_rc_pd_obj();
+                let res = pd_deep_map_block(env, body, seq)?;
+                env.extend(res);
+                Ok(())
+            }),
 
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
@@ -1337,10 +1391,48 @@ fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
     where F: Fn(&PdNum) -> PdNum {
 
     match x {
-        PdObj::Num(n) => PdObj::Num(Rc::new(f(&*n))),
+        PdObj::Num(n) => PdObj::Num(Rc::new(f(n))),
         PdObj::String(s) => pd_build_if_string(s.iter().map(|c| f(&PdNum::from(*c))).collect()),
-        PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| pd_deep_map(f, &*e)).collect())),
+        PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| pd_deep_map(f, e)).collect())),
         _ => { panic!("wtf not deep"); }
+    }
+}
+
+// TODO fix; this is terrible
+// NOTE the caller should expand this cuz why not
+fn pd_deep_map_block(env: &mut Environment, func: &Rc<dyn Block>, x: PdObj) -> PdResult<Vec<PdObj>> {
+
+    match x {
+        PdObj::Num(_) => sandbox(env, func, vec![x]),
+        PdObj::String(_) => { panic!("FIXME to be impl"); }
+        PdObj::List(x) => {
+            let mut acc: Vec<PdObj> = Vec::new();
+
+            for e in x.iter() {
+                acc.extend(pd_deep_map_block(env, func, PdObj::clone(e))?);
+            }
+
+            Ok(vec![PdObj::List(Rc::new(acc))])
+        }
+        _ => { panic!("wtf not deep"); }
+    }
+}
+
+
+fn pd_deep_zip<F>(f: &F, a: &PdObj, b: &PdObj) -> PdObj
+    where F: Fn(&PdNum, &PdNum) -> PdNum {
+
+    match (a, b) {
+        (PdObj::Num(na), PdObj::Num(nb)) => PdObj::Num(Rc::new(f(na, nb))),
+        (PdObj::List(la), PdObj::Num(_)) => {
+            PdObj::List(Rc::new(la.iter().map(|e| pd_deep_zip(f, e, b)).collect()))
+        },
+        (PdObj::List(la), PdObj::List(lb)) => {
+            PdObj::List(Rc::new(la.iter().zip(lb.iter()).map(|(ea, eb)| pd_deep_zip(f, ea, eb)).collect()))
+        },
+        (PdObj::Block(_), _) => { panic!("wtf not deep"); }
+        (_, PdObj::Block(_)) => { panic!("wtf not deep"); }
+        (_, _) => { panic!("not implemented"); }
     }
 }
 
@@ -1893,6 +1985,10 @@ pub fn initialize(env: &mut Environment) {
             println!("{}", env.to_string(&obj));
             Ok(())
         },
+    })));
+    env.short_insert("Á", PdObj::Block(Rc::new(DeepZipBlock {
+        func: |a, b| a + b,
+        name: "plus".to_string(),
     })));
 }
 

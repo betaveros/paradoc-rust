@@ -10,6 +10,7 @@ pub enum PdError {
     IndexError(String),
     BadComparison,
     BadParse,
+    EmptyReduceIntermediate,
 }
 
 pub type PdResult<T> = Result<T, PdError>;
