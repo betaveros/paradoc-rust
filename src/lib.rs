@@ -1,6 +1,7 @@
 #[macro_use] extern crate lazy_static;
 
 use std::cmp::Ordering;
+use std::ops::BitAnd;
 use std::rc::Rc;
 use std::slice::Iter;
 use std::fmt::Debug;
@@ -454,7 +455,31 @@ pub enum PdSeq {
     Range(BigInt, BigInt),
 }
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum PdSeqBuildType { String, NotString }
+
+impl BitAnd for PdSeqBuildType {
+    type Output = PdSeqBuildType;
+
+    fn bitand(self, other: PdSeqBuildType) -> PdSeqBuildType {
+        match (self, other) {
+            (PdSeqBuildType::String,    PdSeqBuildType::String) =>    PdSeqBuildType::String,
+            (PdSeqBuildType::String,    PdSeqBuildType::NotString) => PdSeqBuildType::NotString,
+            (PdSeqBuildType::NotString, PdSeqBuildType::String) =>    PdSeqBuildType::NotString,
+            (PdSeqBuildType::NotString, PdSeqBuildType::NotString) => PdSeqBuildType::NotString,
+        }
+    }
+}
+
 impl PdSeq {
+    fn build_type(&self) -> PdSeqBuildType {
+        match self {
+            PdSeq::List(_) => PdSeqBuildType::NotString,
+            PdSeq::String(_) => PdSeqBuildType::String,
+            PdSeq::Range(_, _) => PdSeqBuildType::NotString,
+        }
+    }
+
     fn to_rc_pd_obj(self) -> Rc<PdObj> {
         match self {
             PdSeq::List(rc) => Rc::new(PdObj::List(rc)),
@@ -1305,6 +1330,150 @@ fn pd_iterate(env: &mut Environment, func: &Rc<dyn Block>) -> PdResult<(Vec<Rc<P
     }
 }
 
+fn key_counter(a: &PdSeq) -> PdResult<HashMap<PdKey, usize>> {
+    let mut ret = HashMap::new();
+    for e in a.iter() {
+        let key = pd_key(&*e)?;
+        match ret.get_mut(&key) {
+            Some(place) => { *place = *place + 1usize; }
+            None => { ret.insert(key, 1usize); }
+        }
+    }
+    Ok(ret)
+}
+
+fn key_set(a: &PdSeq) -> PdResult<HashSet<PdKey>> {
+    let mut ret = HashSet::new();
+    for e in a.iter() {
+        ret.insert(pd_key(&*e)?);
+    }
+    Ok(ret)
+}
+
+fn pd_build_like(ty: PdSeqBuildType, x: Vec<Rc<PdObj>>) -> PdObj {
+    if ty == PdSeqBuildType::NotString {
+        return PdObj::List(Rc::new(x))
+    }
+
+    let mut chars: Vec<char> = Vec::new();
+    let mut char_ok = true;
+    for n in &x {
+        match &**n {
+            PdObj::Num(nn) => match &**nn {
+                PdNum::Char(c) => { chars.push(c.to_u32().and_then(std::char::from_u32).expect("char, c'mon (pdbl)")); }
+                _ => { char_ok = false; break }
+            }
+            _ => { char_ok = false; break }
+        }
+    }
+    if char_ok {
+        PdObj::from(chars)
+    } else {
+        PdObj::List(Rc::new(x))
+    }
+}
+
+fn pd_seq_intersection(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
+    let bty = a.build_type() & b.build_type();
+    let mut counter = key_counter(b)?;
+    let mut acc = Vec::new();
+    for e in a.iter() {
+        let key = pd_key(&e)?;
+        match counter.get_mut(&key) {
+            Some(place) => { if *place > 0 { acc.push(e); *place -= 1; } }
+            None => {}
+        }
+    }
+    Ok(pd_build_like(bty, acc))
+}
+
+fn pd_seq_union(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
+    let bty = a.build_type() & b.build_type();
+    let mut counter = key_counter(a)?;
+    let mut acc = a.to_new_vec();
+    for e in b.iter() {
+        let key = pd_key(&e)?;
+        match counter.get_mut(&key) {
+            Some(place) => {
+                if *place > 0 { *place -= 1; } else { acc.push(e); }
+            }
+            None => {
+                acc.push(e);
+            }
+        }
+    }
+    Ok(pd_build_like(bty, acc))
+}
+
+fn pd_seq_set_difference(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
+    let bty = a.build_type() & b.build_type();
+    let ks = key_set(b)?;
+    let mut acc = Vec::new();
+    for e in a.iter() {
+        if !ks.contains(&pd_key(&e)?) {
+            acc.push(e);
+        }
+    }
+    Ok(pd_build_like(bty, acc))
+}
+
+fn pd_seq_symmetric_difference(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
+    let bty = a.build_type() & b.build_type();
+    let mut acc = Vec::new();
+
+    let bks = key_set(b)?;
+    for e in a.iter() {
+        if !bks.contains(&pd_key(&e)?) { acc.push(e); }
+    }
+
+    let aks = key_set(b)?;
+    for e in b.iter() {
+        if !aks.contains(&pd_key(&e)?) { acc.push(e); }
+    }
+
+    Ok(pd_build_like(bty, acc))
+}
+
+/*
+def pd_seq_intersection(a: PdSeq, b: PdSeq) -> PdSeq:
+    counter = collections.Counter(pykey(e) for e in pd_iterable(b))
+    acc: List[PdObject] = []
+    for element in pd_iterable(a):
+        key = pykey(element)
+        if counter[key] > 0:
+            acc.append(element)
+            counter[key] -= 1
+    return pd_build_like(a, acc)
+def pd_seq_union(a: PdSeq, b: PdSeq) -> PdSeq:
+    acc: List[PdObject] = list(pd_iterable(a))
+    counter = collections.Counter(pykey(e) for e in pd_iterable(a))
+    for element in pd_iterable(b):
+        key = pykey(element)
+        if counter[key] > 0:
+            counter[key] -= 1
+        else:
+            acc.append(element)
+    return pd_build_like(a, acc)
+def pd_seq_difference(a: PdSeq, b: PdSeq) -> PdSeq:
+    set_b = set(pykey(e) for e in pd_iterable(b))
+    acc: List[PdObject] = []
+    for element in pd_iterable(a):
+        if pykey(element) not in set_b:
+            acc.append(element)
+    return pd_build_like(a, acc)
+def pd_seq_symmetric_difference(a: PdSeq, b: PdSeq) -> PdSeq:
+    set_a = collections.Counter(pykey(e) for e in pd_iterable(a))
+    set_b = collections.Counter(pykey(e) for e in pd_iterable(b))
+    acc: List[PdObject] = []
+    for element in pd_iterable(a):
+        if pykey(element) not in set_b:
+            acc.append(element)
+    for element in pd_iterable(b):
+        if pykey(element) not in set_a:
+            acc.append(element)
+    return pd_build_like(a, acc)
+*/
+
 fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
 
 pub fn initialize(env: &mut Environment) {
@@ -1466,16 +1635,44 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_list(slice_util::split_slice_by(seq.to_new_vec().as_slice(), tok.to_new_vec().as_slice()).iter().map(|s| pd_list(s.to_vec())).collect())])
         },
     });
+    let intersection_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1, seq2| {
+            Ok(vec![Rc::new(pd_seq_intersection(seq1, seq2)?)])
+        },
+    });
+    let union_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1, seq2| {
+            Ok(vec![Rc::new(pd_seq_union(seq1, seq2)?)])
+        },
+    });
+    let set_difference_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1, seq2| {
+            Ok(vec![Rc::new(pd_seq_set_difference(seq1, seq2)?)])
+        },
+    });
+    let symmetric_difference_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1, seq2| {
+            Ok(vec![Rc::new(pd_seq_symmetric_difference(seq1, seq2)?)])
+        },
+    });
 
     add_cases("+", cc![plus_case]);
-    add_cases("-", cc![minus_case]);
+    add_cases("-", cc![minus_case, set_difference_case]);
     add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case]);
-    add_cases("&", cc![bitand_case]);
-    add_cases("|", cc![bitor_case]);
-    add_cases("^", cc![bitxor_case]);
+    add_cases("&", cc![bitand_case, intersection_case]);
+    add_cases("|", cc![bitor_case, union_case]);
+    add_cases("^", cc![bitxor_case, symmetric_difference_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
     add_cases("=", cc![eq_case, index_case]);
