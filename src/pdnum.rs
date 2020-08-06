@@ -222,7 +222,7 @@ impl PdNum {
 
     pub fn max<'a>(&'a self, other: &'a Self) -> &'a PdNum {
         match self.total_cmp_small_nan(other) {
-            Ordering::Less => self,
+            Ordering::Greater => self,
             _ => other,
         }
     }
