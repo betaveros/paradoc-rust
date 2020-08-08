@@ -8,6 +8,31 @@ pub struct Trailer(pub String);
 pub enum BlockType {
     Normal,
     Map,
+    Each,
+    Filter,
+    Xloop,
+    Zip,
+    Loop,
+}
+
+fn char_to_block_type(c: char) -> Option<BlockType> {
+    Some(match c {
+        '{'    => BlockType::Normal,
+        'µ'    => BlockType::Map,
+        'μ'    => BlockType::Map,
+        '\x05' => BlockType::Each,
+        'ε'    => BlockType::Each,
+        '\x06' => BlockType::Filter,
+        'φ'    => BlockType::Filter,
+        '\x18' => BlockType::Xloop,
+        'χ'    => BlockType::Xloop,
+        '\x1a' => BlockType::Zip,
+        'ζ'    => BlockType::Zip,
+        '\x1c' => BlockType::Loop,
+        'λ'    => BlockType::Loop,
+
+        _ => return None,
+    })
 }
 
 #[derive(Debug, PartialEq)]
@@ -136,37 +161,37 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
         // TODO: trailers
         let (leader, trailer0) = tokens[cur];
         let mut trailer = trailer0;
-        let (ld, next) = match leader.chars().next() { // first utf-8 char
-            Some('"') => {(
-                Leader::StringLit(parse_string_leader(leader)),
-                cur + 1
-            )}
-            Some('\'') => {(
-                Leader::CharLit(leader.chars().nth(1).unwrap()),
-                cur + 1
-            )}
-            Some('{') => {
+        let next_char_opt = leader.chars().next(); // first utf-8 char
+        let next_char = match next_char_opt {
+            Some(c) => c,
+            None => break,
+        };
+        let (ld, next) = {
+            if let Some(bty) = char_to_block_type(next_char) {
                 let (inner, ni) = parse_at(tokens, cur + 1);
                 assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
                 let start_trailers = parse_trailer(trailer);
                 trailer = tokens[ni].1;
-                (Leader::Block(BlockType::Normal, start_trailers, inner), ni + 1)
-            }
-            Some('µ') => {
-                let (inner, ni) = parse_at(tokens, cur + 1);
-                assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
-                let start_trailers = parse_trailer(trailer);
-                trailer = tokens[ni].1;
-                (Leader::Block(BlockType::Map, start_trailers, inner), ni + 1)
-            }
-            Some('}') => { break; }
-            None => { break; }
-            _ => match leader.parse::<BigInt>() {
-                Ok(x) => { (Leader::IntLit(x), cur + 1) }
-                _ => {
-                    match leader.parse::<f64>() {
-                        Ok(x) => { (Leader::FloatLit(x), cur + 1) }
-                        _ => (Leader::Var(leader.to_string()), cur + 1)
+                (Leader::Block(bty, start_trailers, inner), ni + 1)
+            } else {
+                match next_char {
+                    '"' => (
+                        Leader::StringLit(parse_string_leader(leader)),
+                        cur + 1
+                    ),
+                    '\'' => (
+                        Leader::CharLit(leader.chars().nth(1).unwrap()),
+                        cur + 1
+                    ),
+                    '}' => break,
+                    _ => match leader.parse::<BigInt>() {
+                        Ok(x) => { (Leader::IntLit(x), cur + 1) }
+                        _ => {
+                            match leader.parse::<f64>() {
+                                Ok(x) => { (Leader::FloatLit(x), cur + 1) }
+                                _ => (Leader::Var(leader.to_string()), cur + 1)
+                            }
+                        }
                     }
                 }
             }

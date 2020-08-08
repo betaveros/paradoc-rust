@@ -290,6 +290,12 @@ fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> Res
         Ok(inner.take_stack())
     })
 }
+fn sandbox_truthy(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> Result<bool, PdError> {
+    let res = sandbox(env, func, args)?;
+    let last = res.last().ok_or(PdError::EmptyStack("sandbox truthy bad".to_string()))?;
+    Ok(pd_truthy(last))
+}
+
 #[derive(Debug, Clone)]
 pub enum PdObj {
     Num(Rc<PdNum>),
@@ -905,6 +911,7 @@ fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, body: F, i
     core
 }
 
+// TODO: these should build-like, huh.
 fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
     let mut acc = Vec::new();
     pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(false) }, it)?;
@@ -945,6 +952,26 @@ fn pd_flat_fold_with_short_circuit<B, F>(env: &mut Environment, func: &Rc<dyn Bl
 fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, PdObj) -> PdResult<B> {
     let mut acc = init;
     pd_flatmap_foreach(env, func, |o| { acc = body(&acc, o)?; Ok(false) }, it)?;
+    Ok(acc)
+}
+
+fn pd_filter_core(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, acc: &mut Vec<PdObj>) -> PdUnit {
+    for (i, obj) in it.enumerate() {
+        env.set_yx(PdObj::from(i), PdObj::clone(&obj));
+        if sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])? {
+            acc.push(obj)
+        }
+    }
+    Ok(())
+}
+
+fn pd_filter(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
+    let mut acc = Vec::new();
+
+    env.push_yx();
+    let core = pd_filter_core(env, func, it, &mut acc);
+    env.pop_yx();
+    core?;
     Ok(acc)
 }
 
@@ -1038,6 +1065,21 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
                     lex::BlockType::Map => {
                         trailer.insert(0, lex::Trailer("map".to_string()))
                     }
+                    lex::BlockType::Each => {
+                        trailer.insert(0, lex::Trailer("each".to_string()))
+                    }
+                    lex::BlockType::Filter => {
+                        trailer.insert(0, lex::Trailer("filter".to_string()))
+                    }
+                    lex::BlockType::Xloop => {
+                        trailer.insert(0, lex::Trailer("xloop".to_string()))
+                    }
+                    lex::BlockType::Zip => {
+                        trailer.insert(0, lex::Trailer("zip".to_string()))
+                    }
+                    lex::BlockType::Loop => {
+                        trailer.insert(0, lex::Trailer("loop".to_string()))
+                    }
                 }
                 RcLeader::Lit(PdObj::Block(Rc::new(CodeBlock(t, rcify(b)))))
             }
@@ -1094,9 +1136,24 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 }
                 Ok(())
             }),
+            "x" | "xloop" => obb("xloop", bb, |_env, _body| {
+                panic!("xloop not implemented");
+            }),
+            "z" | "zip" => obb("xloop", bb, |_env, _body| {
+                panic!("zip not implemented");
+            }),
+            "l" | "loop" => obb("loop", bb, |_env, _body| {
+                panic!("loop not implemented");
+            }),
             "m" | "map" => obb("map", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "map")?;
                 let res = pd_map(env, body, seq.iter())?;
+                env.push(pd_list(res));
+                Ok(())
+            }),
+            "f" | "filter" => obb("filter", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "map")?;
+                let res = pd_filter(env, body, seq.iter())?;
                 env.push(pd_list(res));
                 Ok(())
             }),
