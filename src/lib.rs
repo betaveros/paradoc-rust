@@ -187,14 +187,18 @@ impl Environment {
         self.variables.insert(name.to_string(), obj);
     }
 
+    fn peek_x_stack(&self, depth: usize) -> Option<&PdObj> {
+        self.x_stack.get(self.x_stack.len().checked_sub(depth + 1)?)
+    }
+
     fn get(&self, name: &str) -> Option<&PdObj> {
         match &self.shadow {
             Some(inner) => inner.env.get(name),
             None => {
                 match name {
-                    "X" => self.x_stack.get(self.x_stack.len() - 1),
-                    "Y" => self.x_stack.get(self.x_stack.len() - 2),
-                    "Z" => self.x_stack.get(self.x_stack.len() - 3),
+                    "X" => self.peek_x_stack(0),
+                    "Y" => self.peek_x_stack(1),
+                    "Z" => self.peek_x_stack(2),
                     _ => self.variables.get(name)
                 }
             }
@@ -873,19 +877,40 @@ struct DeepZipBlock {
 }
 impl Debug for DeepZipBlock {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "DeepBinaryOpBlock {{ func: ???, name: {:?} }}", self.name)
+        write!(fmt, "DeepZipBLock {{ func: ???, name: {:?} }}", self.name)
     }
 }
 impl Block for DeepZipBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
-        let b = env.pop_result("deep binary op no stack")?;
-        let a = env.pop_result("deep binary op no stack")?;
+        let b = env.pop_result("deep zip no stack")?;
+        let a = env.pop_result("deep zip no stack")?;
         let res = pd_deep_zip(&self.func, &a, &b);
         env.push(res);
         Ok(())
     }
     fn code_repr(&self) -> String {
         String::clone(&self.name) + "_deep_zip"
+    }
+}
+
+struct DeepCharToCharBlock {
+    func: fn(char) -> char,
+    name: String,
+}
+impl Debug for DeepCharToCharBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "DeepCharToCharBlock {{ func: ???, name: {:?} }}", self.name)
+    }
+}
+impl Block for DeepCharToCharBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let a = env.pop_result("deep char to char no stack")?;
+        let res = pd_deep_char_to_char(&self.func, &a);
+        env.push(res);
+        Ok(())
+    }
+    fn code_repr(&self) -> String {
+        String::clone(&self.name) + "_deep_char_to_char"
     }
 }
 
@@ -1450,6 +1475,7 @@ fn pd_build_if_string(x: Vec<PdNum>) -> PdObj {
     }
 }
 
+// note to self: you do need to borrow f because of recursion
 fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
     where F: Fn(&PdNum) -> PdNum {
 
@@ -1504,6 +1530,14 @@ fn pd_deep_zip<F>(f: &F, a: &PdObj, b: &PdObj) -> PdObj
     } else {
         panic!("wtf not deep");
     }
+}
+
+fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdObj
+    where F: Fn(char) -> char {
+
+    pd_deep_map(&|num: &PdNum| {
+        num.to_char().map_or(PdNum::clone(num), |ch| PdNum::from(f(ch)))
+    }, a)
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -2063,6 +2097,24 @@ pub fn initialize(env: &mut Environment) {
     env.short_insert("Á", PdObj::Block(Rc::new(DeepZipBlock {
         func: |a, b| a + b,
         name: "plus".to_string(),
+    })));
+    env.short_insert("Uc", PdObj::Block(Rc::new(DeepCharToCharBlock {
+        func: |a| a.to_uppercase().next().expect("uppercase :("), // FIXME uppercasing chars can produce more than one!
+        name: "uppercase".to_string(),
+    })));
+    env.short_insert("Lc", PdObj::Block(Rc::new(DeepCharToCharBlock {
+        func: |a| a.to_lowercase().next().expect("lowercase :("), // FIXME
+        name: "lowercase".to_string(),
+    })));
+    env.short_insert("Xc", PdObj::Block(Rc::new(DeepCharToCharBlock {
+        func: |a| {
+            if a.is_lowercase() {
+                a.to_uppercase().next().expect("swap to uppercase :(")
+            } else {
+                a.to_lowercase().next().expect("swap to lowercase :(")
+            }
+        },
+        name: "swapcase".to_string(),
     })));
 }
 

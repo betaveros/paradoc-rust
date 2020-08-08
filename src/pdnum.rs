@@ -188,6 +188,14 @@ impl PdNum {
         }
     }
 
+    pub fn to_char(&self) -> Option<char> {
+        std::char::from_u32(match self {
+            PdNum::Int(n) => n.to_u32()?,
+            PdNum::Float(f) => f.trunc().to_u32()?,
+            PdNum::Char(c) => c.to_u32()?,
+        })
+    }
+
     pub fn to_clamped_usize(&self) -> usize {
         match self {
             PdNum::Int(n) => {
