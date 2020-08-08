@@ -1991,6 +1991,35 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let range_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_num,
+        func: |_, num| {
+            let n = num.to_bigint().ok_or(PdError::BadFloat)?;
+            let vs = num_iter::range(BigInt::from(0), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            Ok(vec![(PdObj::List(Rc::new(vs)))])
+        },
+    });
+    let one_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_num,
+        func: |_, num| {
+            let n = num.to_bigint().ok_or(PdError::BadFloat)?;
+            let vs = num_iter::range_inclusive(BigInt::from(1), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            Ok(vec![pd_list(vs)])
+        },
+    });
+    let zip_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.iter().enumerate().map(|(i, x)| pd_list(vec![PdObj::from(i), x])).collect())])
+        },
+    });
+    let zip_one_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.iter().enumerate().map(|(i, x)| pd_list(vec![PdObj::from(i + 1), x])).collect())])
+        },
+    });
+
     add_cases("+", cc![plus_case, cat_list_case]);
     add_cases("-", cc![minus_case, set_difference_case]);
     add_cases("*", cc![times_case]);
@@ -2023,6 +2052,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases("»", cc![inc2_case, rest_case]);
     add_cases("²", cc![square_case]);
     add_cases(" r", cc![space_join_case]);
+    add_cases(",", cc![range_case, zip_range_case]);
+    add_cases("J", cc![one_range_case, zip_one_range_case]);
 
     add_cases(":",   vec![juggle!(a -> a, a)]);
     add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);

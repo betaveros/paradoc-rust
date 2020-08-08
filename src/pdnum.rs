@@ -214,6 +214,22 @@ impl PdNum {
         let s = self.to_usize()?;
         if s == 0 { None } else { Some(s) }
     }
+
+    pub fn to_bigint(&self) -> Option<BigInt> {
+        match self {
+            PdNum::Int(n) => Some(BigInt::clone(n)),
+            PdNum::Float(f) => f.trunc().to_bigint(),
+            PdNum::Char(c) => Some(BigInt::clone(c)),
+        }
+    }
+
+    pub fn construct_like_self(&self, n: BigInt) -> PdNum {
+        match self {
+            PdNum::Int(_)   => PdNum::Int(n),
+            PdNum::Float(_) => PdNum::Int(n),
+            PdNum::Char(_)  => PdNum::Char(n),
+        }
+    }
 }
 
 // this seems... nontrivial??

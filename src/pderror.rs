@@ -10,6 +10,7 @@ pub enum PdError {
     IndexError(String),
     BadComparison,
     BadParse,
+    BadFloat,
     EmptyReduceIntermediate,
     Break,
     Continue,
