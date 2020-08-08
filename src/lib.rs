@@ -17,20 +17,25 @@ mod pdnum;
 mod pderror;
 mod input;
 mod slice_util;
+mod string_util;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
+use crate::string_util::str_class;
+
+#[derive(Debug)]
+pub struct TopEnvironment {
+    x_stack: Vec<PdObj>,
+    variables: HashMap<String, PdObj>,
+    input_trigger: Option<InputTrigger>,
+    reader: Option<EOFReader>,
+}
 
 #[derive(Debug)]
 pub struct Environment {
     stack: Vec<PdObj>,
-    x_stack: Vec<PdObj>,
-    variables: HashMap<String, PdObj>,
     marker_stack: Vec<usize>,
-    // hmmm...
-    shadow: Option<ShadowState>,
-    input_trigger: Option<InputTrigger>,
-    reader: Option<EOFReader>,
+    shadow: Result<ShadowState, TopEnvironment>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,11 +90,14 @@ impl Environment {
     }
 
     fn run_stack_trigger(&mut self) -> Option<PdObj> {
-        match (&mut self.reader, self.input_trigger) {
-            (Some(r), Some(t)) => {
-                r.read(t).expect("io error in input trigger").map(|v| (PdObj::from(v)))
+        match &mut self.shadow {
+            Ok(inner) => inner.env.run_stack_trigger(),
+            Err(top) => match (&mut top.reader, top.input_trigger) {
+                (Some(r), Some(t)) => {
+                    r.read(t).expect("io error in input trigger").map(|v| (PdObj::from(v)))
+                }
+                _ => None
             }
-            _ => None
         }
     }
 
@@ -108,8 +116,8 @@ impl Environment {
                 Some(v)
             }
             None => match &mut self.shadow {
-                Some(inner) => inner.pop(),
-                None => self.run_stack_trigger()
+                Ok(inner) => inner.pop(),
+                Err(_) => self.run_stack_trigger()
             }
         }
     }
@@ -165,8 +173,29 @@ impl Environment {
         }
     }
 
+    fn borrow_x_stack(&self) -> &Vec<PdObj> {
+        match &self.shadow {
+            Ok(inner) => inner.env.borrow_x_stack(),
+            Err(top) => &top.x_stack,
+        }
+    }
+
+    fn borrow_x_stack_mut(&mut self) -> &mut Vec<PdObj> {
+        match &mut self.shadow {
+            Ok(inner) => inner.env.borrow_x_stack_mut(),
+            Err(top) => &mut top.x_stack,
+        }
+    }
+
+    fn borrow_variables(&mut self) -> &mut HashMap<String, PdObj> {
+        match &mut self.shadow {
+            Ok(inner) => inner.env.borrow_variables(),
+            Err(top) => &mut top.variables,
+        }
+    }
+
     fn push_x(&mut self, obj: PdObj) {
-        self.x_stack.push(obj)
+        self.borrow_x_stack_mut().push(obj)
     }
 
     fn push_yx(&mut self) {
@@ -174,58 +203,70 @@ impl Environment {
         self.push_x(PdObj::from("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
     }
     fn set_yx(&mut self, y: PdObj, x: PdObj) {
-        let len = self.x_stack.len();
-        self.x_stack[len - 2] = y;
-        self.x_stack[len - 1] = x;
+        let x_stack = self.borrow_x_stack_mut();
+        let len = x_stack.len();
+        x_stack[len - 2] = y;
+        x_stack[len - 1] = x;
     }
     fn pop_yx(&mut self) {
-        self.x_stack.pop();
-        self.x_stack.pop();
+        let x_stack = self.borrow_x_stack_mut();
+        x_stack.pop().expect("m8 pop_yx");
+        x_stack.pop().expect("m8 pop_yx");
     }
 
-    fn short_insert(&mut self, name: &str, obj: PdObj) {
-        self.variables.insert(name.to_string(), obj);
+    fn short_insert(&mut self, name: &str, obj: impl Into<PdObj>) {
+        self.borrow_variables().insert(name.to_string(), obj.into());
     }
 
     fn peek_x_stack(&self, depth: usize) -> Option<&PdObj> {
-        self.x_stack.get(self.x_stack.len().checked_sub(depth + 1)?)
+        let x_stack = self.borrow_x_stack();
+        x_stack.get(x_stack.len().checked_sub(depth + 1)?)
     }
 
     fn get(&self, name: &str) -> Option<&PdObj> {
         match &self.shadow {
-            Some(inner) => inner.env.get(name),
-            None => {
+            Ok(inner) => inner.env.get(name),
+            Err(top) => {
                 match name {
                     "X" => self.peek_x_stack(0),
                     "Y" => self.peek_x_stack(1),
                     "Z" => self.peek_x_stack(2),
-                    _ => self.variables.get(name)
+                    _ => top.variables.get(name)
                 }
             }
+        }
+    }
+
+    fn set_input_trigger(&mut self, t: Option<InputTrigger>) {
+        match &mut self.shadow {
+            Ok(inner) => inner.env.set_input_trigger(t),
+            Err(top) => top.input_trigger = t,
         }
     }
 
     pub fn new_with_stdin() -> Environment {
         Environment {
             stack: Vec::new(),
-            x_stack: Vec::new(),
-            variables: HashMap::new(),
             marker_stack: Vec::new(),
-            shadow: None,
-            input_trigger: None,
-            reader: Some(EOFReader::new(Box::new(std::io::BufReader::new(std::io::stdin())))),
+            shadow: Err(TopEnvironment {
+                x_stack: Vec::new(),
+                variables: HashMap::new(),
+                input_trigger: None,
+                reader: Some(EOFReader::new(Box::new(std::io::BufReader::new(std::io::stdin())))),
+            }),
         }
     }
 
     pub fn new() -> Environment {
         Environment {
             stack: Vec::new(),
-            x_stack: Vec::new(),
-            variables: HashMap::new(),
             marker_stack: Vec::new(),
-            shadow: None,
-            input_trigger: None,
-            reader: None,
+            shadow: Err(TopEnvironment {
+                x_stack: Vec::new(),
+                variables: HashMap::new(),
+                input_trigger: None,
+                reader: None,
+            }),
         }
     }
 
@@ -264,12 +305,8 @@ impl Environment {
 
         let mut benv = Environment {
             stack: Vec::new(),
-            x_stack: Vec::new(),
-            variables: HashMap::new(),
             marker_stack: vec![0],
-            shadow: Some(ShadowState { env: Box::new(env), arity: 0, shadow_type }),
-            input_trigger: None,
-            reader: None,
+            shadow: Ok(ShadowState { env: Box::new(env), arity: 0, shadow_type }),
         };
 
         let ret = body(&mut benv)?;
@@ -336,6 +373,14 @@ impl From<PdNum> for PdObj {
     }
 }
 
+// 'static means it contains no references with a lifetime less than 'static
+// all things that lack references satisfy that. weird
+impl<T: Block + 'static> From<T> for PdObj {
+    fn from(s: T) -> PdObj where T: 'static {
+        PdObj::Block(Rc::new(s))
+    }
+}
+
 macro_rules! forward_from {
     ($ty:ident) => {
         impl From<$ty> for PdObj {
@@ -360,8 +405,8 @@ impl From<String> for PdObj {
         PdObj::String(Rc::new(s.chars().collect()))
     }
 }
-impl From<&String> for PdObj {
-    fn from(s: &String) -> Self {
+impl From<&str> for PdObj {
+    fn from(s: &str) -> Self {
         PdObj::String(Rc::new(s.chars().collect()))
     }
 }
@@ -1322,14 +1367,14 @@ impl Block for CodeBlock {
             let mut trailer: &str = init_trailer.0.as_ref();
             trailer = trailer.strip_prefix('_').unwrap_or(trailer);
             match trailer {
-                "i" | "input"       => { env.input_trigger = Some(InputTrigger::All       ); }
-                "l" | "line"        => { env.input_trigger = Some(InputTrigger::Line      ); }
-                "w" | "word"        => { env.input_trigger = Some(InputTrigger::Word      ); }
-                "v" | "values"      => { env.input_trigger = Some(InputTrigger::Value     ); }
-                "r" | "record"      => { env.input_trigger = Some(InputTrigger::Record    ); }
-                "a" | "linearray"   => { env.input_trigger = Some(InputTrigger::AllLines  ); }
-                "y" | "valuearray"  => { env.input_trigger = Some(InputTrigger::AllValues ); }
-                "q" | "recordarray" => { env.input_trigger = Some(InputTrigger::AllRecords); }
+                "i" | "input"       => { env.set_input_trigger(Some(InputTrigger::All       )); }
+                "l" | "line"        => { env.set_input_trigger(Some(InputTrigger::Line      )); }
+                "w" | "word"        => { env.set_input_trigger(Some(InputTrigger::Word      )); }
+                "v" | "values"      => { env.set_input_trigger(Some(InputTrigger::Value     )); }
+                "r" | "record"      => { env.set_input_trigger(Some(InputTrigger::Record    )); }
+                "a" | "linearray"   => { env.set_input_trigger(Some(InputTrigger::AllLines  )); }
+                "y" | "valuearray"  => { env.set_input_trigger(Some(InputTrigger::AllValues )); }
+                "q" | "recordarray" => { env.set_input_trigger(Some(InputTrigger::AllRecords)); }
                 _ => { panic!("unsupported init trailer"); }
             }
         }
@@ -1828,10 +1873,10 @@ pub fn initialize(env: &mut Environment) {
     let butlast_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_last().ok_or(PdError::BadList("Butlast of empty list"))?.1]) });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
-        env.variables.insert(name.to_string(), PdObj::Block(Rc::new(CasedBuiltIn {
+        env.short_insert(name, CasedBuiltIn {
             name: name.to_string(),
             cases,
-        })));
+        });
     };
 
     let map_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -2045,34 +2090,66 @@ pub fn initialize(env: &mut Environment) {
 
 
     // env.variables.insert("X".to_string(), (PdObj::Int(3.to_bigint().unwrap())));
-    env.short_insert("N", PdObj::from('\n'));
-    env.short_insert("A", PdObj::from(10));
-    env.short_insert("¹", PdObj::from(11));
-    env.short_insert("∅", PdObj::from(0));
-    env.short_insert("α", PdObj::from(1));
-    env.short_insert("Ep", PdObj::from(1e-9));
+    env.short_insert("N", '\n');
+    env.short_insert("A", 10);
+    env.short_insert("¹", 11);
+    env.short_insert("∅", 0);
+    env.short_insert("α", 1);
+    env.short_insert("Ep", 1e-9);
+    env.short_insert("Ua", str_class("A-Z"));
+    env.short_insert("La", str_class("a-z"));
 
-    env.short_insert(" ", PdObj::Block(Rc::new(BuiltIn {
+    env.short_insert("Da", str_class("0-9"));
+    env.short_insert("Ua", str_class("A-Z"));
+    env.short_insert("La", str_class("a-z"));
+    env.short_insert("Aa", str_class("A-Za-z"));
+
+    // # Non-breaking space (U+00A0)
+    env.short_insert("\u{a0}", ' ');
+    env.short_insert("␣", ' ');
+
+    env.short_insert("Å", str_class("A-Z"));
+    env.short_insert("Åa", str_class("a-zA-Z"));
+    // env.short_insert("Åb", case_double("BCDFGHJKLMNPQRSTVWXZ"));
+    // env.short_insert("Åc", case_double("BCDFGHJKLMNPQRSTVWXYZ"));
+    env.short_insert("Åd", str_class("9-0"));
+    env.short_insert("Åf", str_class("A-Za-z0-9+/"));
+    env.short_insert("Åh", str_class("0-9A-F"));
+    env.short_insert("Åi", str_class("A-Za-z0-9_"));
+    env.short_insert("Åj", str_class("a-zA-Z0-9_"));
+    env.short_insert("Ål", str_class("z-a"));
+    env.short_insert("Åm", "()<>[]{}");
+    env.short_insert("Åp", str_class(" -~"));
+    // env.short_insert("Åq", case_double("QWERTYUIOP"));
+    // env.short_insert("Ås", case_double("ASDFGHJKL"));
+    env.short_insert("Åt", str_class("0-9A-Z"));
+    env.short_insert("Åu", str_class("Z-A"));
+    // env.short_insert("Åv", case_double("AEIOU"));
+    // env.short_insert("Åx", case_double("ZXCVBNM"));
+    // env.short_insert("Åy", case_double("AEIOUY"));
+    env.short_insert("Åz", str_class("z-aZ-A"));
+
+    env.short_insert(" ", BuiltIn {
         name: "Nop".to_string(),
         func: |_env| Ok(()),
-    })));
-    env.short_insert("\n", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("\n", BuiltIn {
         name: "Nop".to_string(),
         func: |_env| Ok(()),
-    })));
-    env.short_insert("[", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("[", BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); Ok(()) },
-    })));
-    env.short_insert("]", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("]", BuiltIn {
         name: "Pack".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
             env.push(pd_list(list));
             Ok(())
         },
-    })));
-    env.short_insert("¬", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("¬", BuiltIn {
         name: "Pack_reverse".to_string(),
         func: |env| {
             let mut list = env.pop_until_stack_marker();
@@ -2080,8 +2157,8 @@ pub fn initialize(env: &mut Environment) {
             env.push(pd_list(list));
             Ok(())
         },
-    })));
-    env.short_insert("~", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("~", BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
             match env.pop_result("~ failed")? {
@@ -2090,24 +2167,24 @@ pub fn initialize(env: &mut Environment) {
                 _ => Err(PdError::BadArgument("~ can't handle".to_string())),
             }
         },
-    })));
-    env.short_insert("O", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("O", BuiltIn {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_result("O failed")?;
             print!("{}", env.to_string(&obj));
             Ok(())
         },
-    })));
-    env.short_insert("P", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("P", BuiltIn {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_result("P failed")?;
             println!("{}", env.to_string(&obj));
             Ok(())
         },
-    })));
-    env.short_insert("?", PdObj::Block(Rc::new(BuiltIn {
+    });
+    env.short_insert("?", BuiltIn {
         name: "If_else".to_string(),
         func: |env| {
             let else_branch = env.pop_result("If_else else failed")?;
@@ -2119,20 +2196,20 @@ pub fn initialize(env: &mut Environment) {
                 apply_on(env, else_branch)
             }
         },
-    })));
-    env.short_insert("Á", PdObj::Block(Rc::new(DeepZipBlock {
+    });
+    env.short_insert("Á", DeepZipBlock {
         func: |a, b| a + b,
         name: "plus".to_string(),
-    })));
-    env.short_insert("Uc", PdObj::Block(Rc::new(DeepCharToCharBlock {
+    });
+    env.short_insert("Uc", DeepCharToCharBlock {
         func: |a| a.to_uppercase().next().expect("uppercase :("), // FIXME uppercasing chars can produce more than one!
         name: "uppercase".to_string(),
-    })));
-    env.short_insert("Lc", PdObj::Block(Rc::new(DeepCharToCharBlock {
+    });
+    env.short_insert("Lc", DeepCharToCharBlock {
         func: |a| a.to_lowercase().next().expect("lowercase :("), // FIXME
         name: "lowercase".to_string(),
-    })));
-    env.short_insert("Xc", PdObj::Block(Rc::new(DeepCharToCharBlock {
+    });
+    env.short_insert("Xc", DeepCharToCharBlock {
         func: |a| {
             if a.is_lowercase() {
                 a.to_uppercase().next().expect("swap to uppercase :(")
@@ -2141,7 +2218,7 @@ pub fn initialize(env: &mut Environment) {
             }
         },
         name: "swapcase".to_string(),
-    })));
+    });
 }
 
 pub fn simple_eval(code: &str) -> Vec<PdObj> {
