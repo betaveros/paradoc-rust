@@ -914,6 +914,22 @@ impl Block for DeepCharToCharBlock {
     }
 }
 
+fn pd_each_core(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdUnit {
+    for (i, obj) in it.enumerate() {
+        env.set_yx(PdObj::from(i), PdObj::clone(&obj));
+        env.push(obj);
+        func.run(env)?;
+    }
+    Ok(())
+}
+
+fn pd_each(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdUnit {
+    env.push_yx();
+    let core = pd_each_core(env, func, it);
+    env.pop_yx();
+    core
+}
+
 // TODO: handle continue/break (have fun!) (this should be fine now)
 // doesn't push and pop yx
 // The inner function returns true to break out of the loop.
@@ -1156,11 +1172,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             }
             "e" | "each" => obb("each", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "each")?;
-                for obj in seq.iter() {
-                    env.push(PdObj::clone(&obj));
-                    body.run(env)?;
-                }
-                Ok(())
+                pd_each(env, body, seq.iter())
             }),
             "x" | "xloop" => obb("xloop", bb, |_env, _body| {
                 panic!("xloop not implemented");
