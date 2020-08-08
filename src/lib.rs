@@ -959,48 +959,48 @@ impl Block for DeepCharToCharBlock {
     }
 }
 
-fn pd_each_core(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdUnit {
+fn yx_loop<F>(env: &mut Environment, it: PdIter, mut body: F) -> PdUnit where F: FnMut(&mut Environment, usize, PdObj) -> PdUnit {
+    env.push_yx();
+    let mut ret = Ok(());
     for (i, obj) in it.enumerate() {
         env.set_yx(PdObj::from(i), PdObj::clone(&obj));
-        env.push(obj);
-        func.run(env)?;
+        match body(env, i, obj) {
+            Ok(()) => {}
+            Err(PdError::Break) => break,
+            Err(PdError::Continue) => {}
+            Err(e) => { ret = Err(e); break; }
+        }
     }
-    Ok(())
+    env.pop_yx();
+    ret
 }
 
 fn pd_each(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdUnit {
-    env.push_yx();
-    let core = pd_each_core(env, func, it);
-    env.pop_yx();
-    core
+    yx_loop(env, it, |env, _, obj| {
+        env.push(obj);
+        func.run(env)
+    })
 }
 
-// TODO: handle continue/break (have fun!) (this should be fine now)
-// doesn't push and pop yx
-// The inner function returns true to break out of the loop.
-fn pd_flatmap_foreach_core<F>(env: &mut Environment, func: &Rc<dyn Block>, mut body: F, it: PdIter) -> PdUnit where F: FnMut(PdObj) -> PdResult<bool> {
-    let mut broken: bool = false;
-    for (i, obj) in it.enumerate() {
-        env.set_yx(PdObj::from(i), PdObj::clone(&obj));
+fn pd_xloop(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdUnit {
+    yx_loop(env, it, |env, _, _| {
+        func.run(env)
+    })
+}
+
+fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, mut body: F, it: PdIter) -> PdUnit where F: FnMut(PdObj) -> PdUnit {
+    yx_loop(env, it, |env, _, obj| {
         for e in sandbox(env, &func, vec![obj])? {
-            if body(e)? { broken = true; break; }
+            body(e)?
         }
-        if broken { break; }
-    }
-    Ok(())
-}
-
-fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, body: F, it: PdIter) -> PdUnit where F: FnMut(PdObj) -> PdResult<bool> {
-    env.push_yx();
-    let core = pd_flatmap_foreach_core(env, func, body, it);
-    env.pop_yx();
-    core
+        Ok(())
+    })
 }
 
 // TODO: these should build-like, huh.
 fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
     let mut acc = Vec::new();
-    pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(false) }, it)?;
+    pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(()) }, it)?;
     Ok(acc)
 }
 
@@ -1030,34 +1030,25 @@ fn pd_flat_fold_with_short_circuit<B, F>(env: &mut Environment, func: &Rc<dyn Bl
     pd_flatmap_foreach(env, func, |o| {
         let (do_break, acc2) = body(&acc, o)?;
         acc = acc2;
-        Ok(do_break)
+        if do_break { Err(PdError::Break) } else { Ok(()) }
     }, it)?;
     Ok(acc)
 }
 
 fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body: F, it: PdIter) -> PdResult<B> where F: Fn(&B, PdObj) -> PdResult<B> {
     let mut acc = init;
-    pd_flatmap_foreach(env, func, |o| { acc = body(&acc, o)?; Ok(false) }, it)?;
+    pd_flatmap_foreach(env, func, |o| { acc = body(&acc, o)?; Ok(()) }, it)?;
     Ok(acc)
-}
-
-fn pd_filter_core(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, acc: &mut Vec<PdObj>) -> PdUnit {
-    for (i, obj) in it.enumerate() {
-        env.set_yx(PdObj::from(i), PdObj::clone(&obj));
-        if sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])? {
-            acc.push(obj)
-        }
-    }
-    Ok(())
 }
 
 fn pd_filter(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
     let mut acc = Vec::new();
-
-    env.push_yx();
-    let core = pd_filter_core(env, func, it, &mut acc);
-    env.pop_yx();
-    core?;
+    yx_loop(env, it, |env, _, obj| {
+        if sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])? {
+            acc.push(obj)
+        }
+        Ok(())
+    })?;
     Ok(acc)
 }
 
@@ -1219,10 +1210,11 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let seq = pop_seq_range_for(env, "each")?;
                 pd_each(env, body, seq.iter())
             }),
-            "x" | "xloop" => obb("xloop", bb, |_env, _body| {
-                panic!("xloop not implemented");
+            "x" | "xloop" => obb("xloop", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "xloop")?;
+                pd_xloop(env, body, seq.iter())
             }),
-            "z" | "zip" => obb("xloop", bb, |_env, _body| {
+            "z" | "zip" => obb("zip", bb, |_env, _body| {
                 panic!("zip not implemented");
             }),
             "l" | "loop" => obb("loop", bb, |_env, _body| {
@@ -1277,6 +1269,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let seq = pop_seq_range_for(env, "sum")?;
                 let res = pd_flat_fold(env, body, PdNum::from(0),
                     |acc, o| { Ok(acc + &pd_deep_sum(&o)?) }, seq.iter())?;
+                env.push(PdObj::from(res));
+                Ok(())
+            }),
+            "þ" | "product" => obb("product", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "product")?;
+                let res = pd_flat_fold(env, body, PdNum::from(0),
+                    |acc, o| { Ok(acc * &pd_deep_product(&o)?) }, seq.iter())?;
                 env.push(PdObj::from(res));
                 Ok(())
             }),

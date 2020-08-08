@@ -11,6 +11,8 @@ pub enum PdError {
     BadComparison,
     BadParse,
     EmptyReduceIntermediate,
+    Break,
+    Continue,
 }
 
 pub type PdResult<T> = Result<T, PdError>;
