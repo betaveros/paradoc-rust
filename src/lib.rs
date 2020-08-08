@@ -1323,6 +1323,12 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.extend(res);
                 Ok(())
             }),
+            "ø" | "organize" => obb("organize", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "map")?;
+                let res = pd_organize_by(env, body, &seq)?;
+                env.push(res);
+                Ok(())
+            }),
 
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
@@ -1597,7 +1603,7 @@ fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdObj
     }, a)
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum PdKey {
     Num(PdTotalNum),
     String(Rc<Vec<char>>),
@@ -1745,6 +1751,40 @@ fn pd_seq_symmetric_difference(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     }
 
     Ok(pd_build_like(bty, acc))
+}
+
+fn pd_organize_by_function<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let bty = seq.build_type();
+    let mut key_order: Vec<PdKey> = Vec::new();
+    let mut groups: HashMap<PdKey, Vec<PdObj>> = HashMap::new();
+
+    for e in seq.iter() {
+        let key = proj(&e)?;
+        match groups.get_mut(&key) {
+            Some(place) => { place.push(e); }
+            None => {
+                key_order.push(PdKey::clone(&key));
+                groups.insert(key, vec![e]);
+            }
+        }
+    }
+
+    Ok(pd_list(key_order.iter().map(|key| pd_build_like(bty, groups.remove(key).expect("organize internal fail"))).collect()))
+}
+
+fn pd_organize(seq: &PdSeq) -> PdResult<PdObj> {
+    pd_organize_by_function(seq, pd_key)
+}
+
+fn pd_organize_by(env: &mut Environment, func: &Rc<dyn Block>, seq: &PdSeq) -> PdResult<PdObj> {
+    pd_organize_by_function(seq, |x| -> PdResult<PdKey> {
+        Ok(PdKey::List(Rc::new(
+            sandbox(env, func, vec![PdObj::clone(x)])?
+            .iter()
+            .map(|e| -> PdResult<Rc<PdKey>> { Ok(Rc::new(pd_key(e)?)) })
+            .collect::<PdResult<Vec<Rc<PdKey>>>>()?
+        )))
+    })
 }
 
 /*
@@ -2020,6 +2060,14 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    // FIXME
+    let organize_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_organize(seq)?])
+        },
+    });
+
     add_cases("+", cc![plus_case, cat_list_case]);
     add_cases("-", cc![minus_case, set_difference_case]);
     add_cases("*", cc![times_case]);
@@ -2054,6 +2102,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case]);
     add_cases("J", cc![one_range_case, zip_one_range_case]);
+
+    add_cases("Ø", cc![organize_case]);
 
     add_cases(":",   vec![juggle!(a -> a, a)]);
     add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);

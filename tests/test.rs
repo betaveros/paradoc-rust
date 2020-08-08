@@ -94,3 +94,8 @@ fn looping() {
     assert_eq!(paradoc::simple_eval("[2 5 3]3-v"), vec![list(intvec![-1, 2, 0])]);
     assert_eq!(paradoc::simple_eval("9[2 5 3]-y"), vec![list(intvec![7, 4, 6])]);
 }
+
+#[test]
+fn organize() {
+    assert_eq!(paradoc::simple_eval("5{2%}ø"), vec![list(vec![list(intvec![0, 2, 4]), list(intvec![1, 3])])]);
+}
