@@ -1146,6 +1146,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
         PdObj::Block(bb) => match trailer {
+            "" => Ok((PdObj::clone(obj), true)),
             "b" | "bind" => {
                 let b = outer_env.pop_result("bind nothing to bind")?;
                 Ok(((PdObj::Block(Rc::new(BindBlock {
@@ -2092,6 +2093,19 @@ pub fn initialize(env: &mut Environment) {
             let obj = env.pop_result("P failed")?;
             println!("{}", env.to_string(&obj));
             Ok(())
+        },
+    })));
+    env.short_insert("?", PdObj::Block(Rc::new(BuiltIn {
+        name: "If_else".to_string(),
+        func: |env| {
+            let else_branch = env.pop_result("If_else else failed")?;
+            let if_branch   = env.pop_result("If_else if failed")?;
+            let condition   = env.pop_result("If_else condition failed")?;
+            if pd_truthy(&condition) {
+                apply_on(env, if_branch)
+            } else {
+                apply_on(env, else_branch)
+            }
         },
     })));
     env.short_insert("Á", PdObj::Block(Rc::new(DeepZipBlock {
