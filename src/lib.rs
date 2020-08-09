@@ -200,6 +200,9 @@ impl Environment {
     fn push_x(&mut self, obj: PdObj) {
         self.borrow_x_stack_mut().push(obj)
     }
+    fn pop_x(&mut self) {
+        self.borrow_x_stack_mut().pop().expect("m8 pop_x");
+    }
 
     fn push_yx(&mut self) {
         self.push_x(PdObj::from("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
@@ -208,6 +211,13 @@ impl Environment {
     fn set_yx(&mut self, y: PdObj, x: PdObj) {
         let x_stack = self.borrow_x_stack_mut();
         let len = x_stack.len();
+        x_stack[len - 2] = y;
+        x_stack[len - 1] = x;
+    }
+    fn set_zyx(&mut self, z: PdObj, y: PdObj, x: PdObj) {
+        let x_stack = self.borrow_x_stack_mut();
+        let len = x_stack.len();
+        x_stack[len - 3] = z;
         x_stack[len - 2] = y;
         x_stack[len - 1] = x;
     }
@@ -1034,11 +1044,38 @@ fn pd_flatmap_foreach<F>(env: &mut Environment, func: &Rc<dyn Block>, mut body: 
     })
 }
 
-// TODO: these should build-like, huh.
-fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
+fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, seq: &PdSeq) -> PdResult<PdObj> {
+    let bty = seq.build_type();
     let mut acc = Vec::new();
-    pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(()) }, it)?;
-    Ok(acc)
+    pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(()) }, seq.iter())?;
+    Ok(pd_build_like(bty, acc))
+}
+
+// generically implementing multizip is not super practical, I think
+fn pd_zip(env: &mut Environment, func: &Rc<dyn Block>, seq1: &PdSeq, seq2: &PdSeq) -> PdResult<PdObj> {
+    let bty = seq1.build_type() & seq2.build_type();
+    let mut acc = Vec::new();
+
+    env.push_x(PdObj::from("INTERNAL Z FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+    env.push_x(PdObj::from("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+    env.push_x(PdObj::from("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+
+    let mut ret = Ok(());
+    for (i, (obj1, obj2)) in seq1.iter().zip(seq2.iter()).enumerate() {
+        env.set_zyx(PdObj::from(i), PdObj::clone(&obj2), PdObj::clone(&obj1));
+        match sandbox(env, &func, vec![obj1, obj2]) {
+            Ok(objs) => { acc.extend(objs); }
+            Err(PdError::Break) => break,
+            Err(PdError::Continue) => {}
+            Err(e) => { ret = Err(e); break; }
+        }
+    }
+
+    env.pop_x();
+    env.pop_x();
+    env.pop_x();
+
+    ret.map(|()| pd_build_like(bty, acc))
 }
 
 // TODO: wot, this isn't an xy loop in Paradoc proper?
@@ -1309,16 +1346,20 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let seq = pop_seq_range_for(env, "xloop")?;
                 pd_xloop(env, body, seq.iter())
             }),
-            "z" | "zip" => obb("zip", bb, |_env, _body| {
-                panic!("zip not implemented");
+            "z" | "zip" => obb("zip", bb, |env, body| {
+                let seq2 = pop_seq_range_for(env, "zip(2)")?;
+                let seq1 = pop_seq_range_for(env, "zip(1)")?;
+                let res = pd_zip(env, body, &seq1, &seq2)?;
+                env.push(res);
+                Ok(())
             }),
             "l" | "loop" => obb("loop", bb, |_env, _body| {
                 panic!("loop not implemented");
             }),
             "m" | "map" => obb("map", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "map")?;
-                let res = pd_map(env, body, seq.iter())?;
-                env.push(pd_list(res));
+                let res = pd_map(env, body, &seq)?;
+                env.push(res);
                 Ok(())
             }),
             "f" | "filter" => obb("filter", bb, |env, body| {
@@ -1395,8 +1436,8 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 });
 
                 let seq = pop_seq_range_for(env, "bindmap")?;
-                let res = pd_map(env, &bb, seq.iter())?;
-                env.push(pd_list(res));
+                let res = pd_map(env, &bb, &seq)?;
+                env.push(res);
                 Ok(())
             }),
             "y" | "mapbind" => obb("mapbind", bb, |env, body| {
@@ -1408,8 +1449,8 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                     bound_object: b,
                 });
 
-                let res = pd_map(env, &bb, seq.iter())?;
-                env.push(pd_list(res));
+                let res = pd_map(env, &bb, &seq)?;
+                env.push(res);
                 Ok(())
             }),
             "s" | "scan" => obb("scan", bb, |env, body| {
@@ -2149,7 +2190,7 @@ pub fn initialize(env: &mut Environment) {
     };
 
     let map_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
-        Ok(vec![pd_list(pd_map(env, a, b.iter())?)])
+        Ok(vec![pd_map(env, a, b)?])
     });
 
     let filter_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
