@@ -845,6 +845,10 @@ fn unary_seq_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<PdObj>>) ->
 fn unary_seq_range_case(func: fn(&mut Environment, &PdSeq) -> PdResult<Vec<PdObj>>) -> Rc<dyn Case> {
     Rc::new(UnaryCase { coerce: seq_range, func })
 }
+fn block_seq_range_case(func: fn(&mut Environment, &Rc<dyn Block>, &PdSeq) -> PdResult<Vec<PdObj>>) -> Rc<dyn Case> {
+    Rc::new(BinaryCase { coerce1: just_block, coerce2: seq_range, func })
+}
+
 struct CasedBuiltIn {
     name: String,
     cases: Vec<Rc<dyn Case>>,
@@ -1986,41 +1990,21 @@ pub fn initialize(env: &mut Environment) {
         });
     };
 
-    let map_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_block,
-        coerce2: seq_range,
-        func: |env, a, b| {
-            Ok(vec![pd_list(pd_map(env, a, b.iter())?)])
-        }
+    let map_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_list(pd_map(env, a, b.iter())?)])
     });
 
-    let filter_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_block,
-        coerce2: seq_range,
-        func: |env, a, b| {
-            Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Filter)?)])
-        }
+    let filter_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Filter)?)])
     });
-    let filter_indices_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_block,
-        coerce2: seq_range,
-        func: |env, a, b| {
-            Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Filter)?)])
-        }
+    let filter_indices_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Filter)?)])
     });
-    let reject_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_block,
-        coerce2: seq_range,
-        func: |env, a, b| {
-            Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Reject)?)])
-        }
+    let reject_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Reject)?)])
     });
-    let reject_indices_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_block,
-        coerce2: seq_range,
-        func: |env, a, b| {
-            Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Reject)?)])
-        }
+    let reject_indices_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Reject)?)])
     });
 
     let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(a * a))]) });
@@ -2034,19 +2018,11 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![seq.pythonic_index(*index).ok_or(PdError::IndexError(index.to_string()))?.to_rc_pd_obj()])
         },
     });
-    let find_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Filter)?.1])
-        },
+    let find_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Filter)?.1])
     });
-    let find_not_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Reject)?.1])
-        },
+    let find_not_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Reject)?.1])
     });
     let len_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
@@ -2199,12 +2175,8 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_organize_by(seq, pd_key)?])
         },
     });
-    let organize_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![pd_organize_by(seq, pd_key_projector(env, block))?])
-        },
+    let organize_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_organize_by(seq, pd_key_projector(env, block))?])
     });
 
     let sort_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -2213,13 +2185,9 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_sort_by(seq, pd_key)?])
         },
     });
-    let sort_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![pd_sort_by(seq, pd_key_projector(env, block))?])
-        },
-    });
+    let sort_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_sort_by(seq, pd_key_projector(env, block))?])
+    },);
 
     let is_sorted_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
@@ -2227,12 +2195,8 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x != Ordering::Greater)?)])
         },
     });
-    let is_sorted_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x != Ordering::Greater)?)])
-        },
+    let is_sorted_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x != Ordering::Greater)?)])
     });
 
     let is_strictly_increasing_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -2241,12 +2205,8 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x == Ordering::Less)?)])
         },
     });
-    let is_strictly_increasing_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Less)?)])
-        },
+    let is_strictly_increasing_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Less)?)])
     });
     let is_strictly_decreasing_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
@@ -2254,12 +2214,8 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x == Ordering::Greater)?)])
         },
     });
-    let is_strictly_decreasing_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: seq_range,
-        coerce2: just_block,
-        func: |env, seq, block| {
-            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
-        },
+    let is_strictly_decreasing_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
     });
 
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
