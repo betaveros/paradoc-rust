@@ -3,7 +3,7 @@ use std::slice::Iter;
 use std::hash::Hash;
 use crate::pderror::{PdError, PdResult, PdUnit};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Hoard<K,V> {
     Vec(Vec<V>),
     Deque(VecDeque<V>),
@@ -46,6 +46,15 @@ impl<K,V> Hoard<K,V> {
                 *self = Hoard::Deque(d);
             }
             Hoard::Deque(a) => a.push_front(obj),
+            Hoard::Map(_) => return Err(PdError::InvalidHoardOperation),
+        }
+        Ok(())
+    }
+
+    pub fn extend(&mut self, obj: impl Iterator<Item=V>) -> PdUnit {
+        match self {
+            Hoard::Vec(a) => a.extend(obj),
+            Hoard::Deque(a) => a.extend(obj),
             Hoard::Map(_) => return Err(PdError::InvalidHoardOperation),
         }
         Ok(())
@@ -125,6 +134,14 @@ impl<K: HoardKey, V> Hoard<K, V> {
                 self.force_map().insert(key, value);
             }
         }
+    }
+
+    pub fn delete(&mut self, key: &K) {
+        self.force_map().remove(&key);
+    }
+
+    pub fn replace_vec(&mut self, v: Vec<V>) {
+        *self = Hoard::Vec(v);
     }
 }
 

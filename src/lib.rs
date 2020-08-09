@@ -1454,7 +1454,31 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(obj);
                 Ok(())
             }),
+            "x" | "extend" => hb("extend", hh, |env, hoard| {
+                let seq = pop_seq_range_for(env, "hoard extend")?;
+                hoard.borrow_mut().extend(seq.iter())?;
+                Ok(())
+            }),
 
+            "g" | "get" => hb("get", hh, |env, hoard| {
+                let default_obj = env.pop_result("hoard get default no stack")?;
+                let key_obj = env.pop_result("hoard get key no stack")?;
+                let key = pd_key(&key_obj)?;
+                env.push(hoard.borrow().get(&key).map_or(default_obj, PdObj::clone));
+                Ok(())
+            }),
+            "z" | "getzero" => hb("getzero", hh, |env, hoard| {
+                let key_obj = env.pop_result("hoard update key no stack")?;
+                let key = pd_key(&key_obj)?;
+                env.push(hoard.borrow().get(&key).map_or(PdObj::from(0), PdObj::clone));
+                Ok(())
+            }),
+            "h" | "haskey" => hb("haskey", hh, |env, hoard| {
+                let key_obj = env.pop_result("hoard haskey key no stack")?;
+                let key = pd_key(&key_obj)?;
+                env.push(PdObj::iverson(hoard.borrow().get(&key).is_some()));
+                Ok(())
+            }),
             "u" | "update" => hb("update", hh, |env, hoard| {
                 let val_obj = env.pop_result("hoard update val no stack")?;
                 let key_obj = env.pop_result("hoard update key no stack")?;
@@ -1466,6 +1490,31 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let key_obj = env.pop_result("hoard update key no stack")?;
                 let key = pd_key(&key_obj)?;
                 hoard.borrow_mut().update(key, PdObj::from(1));
+                Ok(())
+            }),
+            "d" | "delete" => hb("delete", hh, |env, hoard| {
+                let key_obj = env.pop_result("hoard update key no stack")?;
+                let key = pd_key(&key_obj)?;
+                hoard.borrow_mut().delete(&key);
+                Ok(())
+            }),
+            "r" | "replace" => hb("replace", hh, |env, hoard| {
+                let obj = env.pop_result("hoard replace no stack")?;
+                if let PdObj::Hoard(h) = obj {
+                    *hoard.borrow_mut() = Hoard::clone(&h.borrow());
+                    Ok(())
+                } else if let Some(seq) = seq_num_singleton(&obj) {
+                    hoard.borrow_mut().replace_vec(seq.to_new_vec());
+                    Ok(())
+                } else {
+                    Err(PdError::InvalidHoardOperation)
+                }
+            }),
+            "t" | "translate" => hb("translate", hh, |env, hoard| {
+                let seq = pop_seq_range_for(env, "hoard translate")?;
+                let keys = seq.iter().map(|x| pd_key(&x)).collect::<PdResult<Vec<PdKey>>>()?;
+
+                env.push(pd_list(keys.iter().map(|k| hoard.borrow().get(&k).map_or(PdObj::from(0), PdObj::clone)).collect()));
                 Ok(())
             }),
 
