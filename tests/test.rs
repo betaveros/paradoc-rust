@@ -126,3 +126,8 @@ fn is_sorted_by() {
     assert_eq!(paradoc::simple_eval("[4 4 8]>p"), intvec![0]);
     assert_eq!(paradoc::simple_eval("[5 3 1]>p"), intvec![1]);
 }
+
+#[test]
+fn hoard() {
+    assert_eq!(paradoc::simple_eval("1 2 Hu 4 5 Hu 4 H="), intvec![5]);
+}

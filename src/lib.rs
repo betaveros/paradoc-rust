@@ -24,7 +24,7 @@ use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
 use crate::string_util::{str_class, int_groups, float_groups};
-use crate::hoard::Hoard;
+use crate::hoard::{Hoard, HoardKey};
 
 #[derive(Debug)]
 pub struct TopEnvironment {
@@ -351,6 +351,8 @@ pub enum PdObj {
     Hoard(Rc<RefCell<Hoard<PdKey, PdObj>>>),
 }
 
+type PdHoard = Hoard<PdKey, PdObj>;
+
 impl PartialEq for PdObj {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -416,8 +418,8 @@ impl From<&str> for PdObj {
         PdObj::String(Rc::new(s.chars().collect()))
     }
 }
-impl From<Hoard<PdKey, PdObj>> for PdObj {
-    fn from(h: Hoard<PdKey, PdObj>) -> Self {
+impl From<PdHoard> for PdObj {
+    fn from(h: PdHoard) -> Self {
         PdObj::Hoard(Rc::new(RefCell::new(h)))
     }
 }
@@ -528,6 +530,17 @@ fn num_to_nn_usize(obj: &PdObj) -> Option<usize> {
 fn just_string(obj: &PdObj) -> Option<Rc<Vec<char>>> {
     match obj {
         PdObj::String(s) => Some(Rc::clone(s)),
+        _ => None,
+    }
+}
+
+fn just_pd_key(obj: &PdObj) -> Option<PdKey> {
+    // FIXME this is kinda scary
+    pd_key(obj).ok()
+}
+fn just_hoard(obj: &PdObj) -> Option<Rc<RefCell<PdHoard>>> {
+    match obj {
+        PdObj::Hoard(h) => Some(Rc::clone(h)),
         _ => None,
     }
 }
@@ -762,6 +775,7 @@ fn just_seq(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::List(a) => Some(PdSeq::List(Rc::clone(a))),
         PdObj::String(a) => Some(PdSeq::String(Rc::clone(a))),
+        PdObj::Hoard(h) => Some(PdSeq::List(Rc::new(h.borrow().iter().cloned().collect()))),
         _ => None,
     }
 }
@@ -1164,6 +1178,26 @@ impl Block for UnderBindBlock {
     }
 }
 
+struct HoardBlock {
+    name: &'static str,
+    hoard: Rc<RefCell<PdHoard>>,
+    f: fn(&mut Environment, &Rc<RefCell<PdHoard>>) -> PdUnit,
+}
+impl Debug for HoardBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "HoardBlock {{ name: {:?}, hoard: {:?}, f: ??? }}", self.name, self.hoard)
+    }
+}
+impl Block for HoardBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        (self.f)(env, &self.hoard)
+    }
+    fn code_repr(&self) -> String {
+        // FIXME
+        format!("(Hoard)_{}", self.name)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum RcLeader {
     Lit(PdObj),
@@ -1238,6 +1272,10 @@ impl CodeBlock {
 fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> PdResult<(PdObj, bool)> {
     let body: Rc<dyn Block> = Rc::clone(bb);
     Ok(((PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
+}
+fn hb(name: &'static str, h: &Rc<RefCell<PdHoard>>, f: fn(&mut Environment, &Rc<RefCell<PdHoard>>) -> PdUnit) -> PdResult<(PdObj, bool)> {
+    let hoard: Rc<RefCell<PdHoard>> = Rc::clone(h);
+    Ok(((PdObj::Block(Rc::new(HoardBlock { name, hoard, f }))), false))
 }
 fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trailer) -> PdResult<(PdObj, bool)> {
     let mut trailer: &str = trailer0.0.as_ref();
@@ -1390,6 +1428,44 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let seq = pop_seq_range_for(env, "map")?;
                 let res = pd_organize_by(&seq, pd_key_projector(env, body))?;
                 env.push(res);
+                Ok(())
+            }),
+
+            _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+        }
+        PdObj::Hoard(hh) => match trailer {
+            "a" | "append" => hb("append", hh, |env, hoard| {
+                let obj = env.pop_result("hoard append no stack")?;
+                hoard.borrow_mut().push(obj)?;
+                Ok(())
+            }),
+            "b" | "appendleft" => hb("appendleft", hh, |env, hoard| {
+                let obj = env.pop_result("hoard append no stack")?;
+                hoard.borrow_mut().push_front(obj)?;
+                Ok(())
+            }),
+            "p" | "pop" => hb("pop", hh, |env, hoard| {
+                let obj = hoard.borrow_mut().pop()?.ok_or(PdError::BadList("Pop empty list"))?;
+                env.push(obj);
+                Ok(())
+            }),
+            "q" | "popleft" => hb("popleft", hh, |env, hoard| {
+                let obj = hoard.borrow_mut().pop_front()?.ok_or(PdError::BadList("Pop left empty list"))?;
+                env.push(obj);
+                Ok(())
+            }),
+
+            "u" | "update" => hb("update", hh, |env, hoard| {
+                let val_obj = env.pop_result("hoard update val no stack")?;
+                let key_obj = env.pop_result("hoard update key no stack")?;
+                let key = pd_key(&key_obj)?;
+                hoard.borrow_mut().update(key, val_obj);
+                Ok(())
+            }),
+            "o" | "updateone" => hb("updateone", hh, |env, hoard| {
+                let key_obj = env.pop_result("hoard update key no stack")?;
+                let key = pd_key(&key_obj)?;
+                hoard.borrow_mut().update(key, PdObj::from(1));
                 Ok(())
             }),
 
@@ -1677,6 +1753,19 @@ pub enum PdKey {
     Num(PdTotalNum),
     String(Rc<Vec<char>>),
     List(Rc<Vec<Rc<PdKey>>>),
+}
+
+impl HoardKey for PdKey {
+    fn to_isize(&self) -> Option<isize> {
+        match self {
+            PdKey::Num(n) => n.to_isize(),
+            _ => None,
+        }
+    }
+
+    fn from_usize(i: usize) -> Self {
+        PdKey::Num(PdTotalNum(Rc::new(PdNum::from(i))))
+    }
 }
 
 fn pd_key(obj: &PdObj) -> PdResult<PdKey> {
@@ -2038,6 +2127,13 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![seq.pythonic_index(*index).ok_or(PdError::IndexError(index.to_string()))?.to_rc_pd_obj()])
         },
     });
+    let index_hoard_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_hoard,
+        coerce2: just_pd_key,
+        func: |_, hoard, key| {
+            Ok(vec![PdObj::clone(hoard.borrow().get(key).ok_or(PdError::IndexError("index hoard".to_string()))?)])
+        },
+    });
     let find_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
         Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Filter)?.1])
     });
@@ -2249,7 +2345,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
-    add_cases("=", cc![eq_case, index_case, find_case]);
+    add_cases("=", cc![index_hoard_case, eq_case, index_case, find_case]);
     add_cases("<", cc![lt_case, lt_slice_case]);
     add_cases(">", cc![gt_case, ge_slice_case]);
     add_cases("<m", cc![min_case]);

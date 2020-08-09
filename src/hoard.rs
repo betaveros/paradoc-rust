@@ -1,5 +1,6 @@
 use std::collections::{VecDeque, HashMap};
 use std::slice::Iter;
+use std::hash::Hash;
 use crate::pderror::{PdError, PdResult, PdUnit};
 
 #[derive(Debug)]
@@ -7,6 +8,22 @@ pub enum Hoard<K,V> {
     Vec(Vec<V>),
     Deque(VecDeque<V>),
     Map(HashMap<K,V>),
+}
+
+pub trait HoardKey: Hash + Eq {
+    fn to_isize(&self) -> Option<isize>;
+    fn from_usize(i: usize) -> Self;
+
+    fn to_pythonic_index(&self, len: usize) -> Option<usize> {
+        let mut i = self.to_isize()?;
+        if 0 <= i {
+            let u = i as usize;
+            if u < len { Some(u) } else { None }
+        } else {
+            i += len as isize;
+            if 0 <= i { Some(i as usize) } else { None }
+        }
+    }
 }
 
 impl<K,V> Hoard<K,V> {
@@ -54,14 +71,59 @@ impl<K,V> Hoard<K,V> {
             Hoard::Map(_) => Err(PdError::InvalidHoardOperation),
         }
     }
-}
 
-impl<K,V> Hoard<K,V> {
     pub fn is_empty(&self) -> bool {
         match self {
             Hoard::Vec(a) => a.is_empty(),
             Hoard::Deque(a) => a.is_empty(),
             Hoard::Map(a) => a.is_empty(),
+        }
+    }
+}
+
+impl<K: HoardKey, V> Hoard<K, V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
+        match self {
+            Hoard::Vec(a) => {
+                let len = a.len();
+                a.get(key.to_pythonic_index(len)?)
+            },
+            Hoard::Deque(a) => a.get(key.to_pythonic_index(a.len())?),
+            Hoard::Map(a) => a.get(key),
+        }
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match self {
+            Hoard::Vec(a) => {
+                let len = a.len();
+                a.get_mut(key.to_pythonic_index(len)?)
+            },
+            Hoard::Deque(a) => a.get_mut(key.to_pythonic_index(a.len())?),
+            Hoard::Map(a) => a.get_mut(key),
+        }
+    }
+
+    fn force_map(&mut self) -> &mut HashMap<K, V> {
+        match self {
+            Hoard::Vec(a) => {
+                *self = Hoard::Map(a.drain(..).enumerate().map(|(i, e)| (K::from_usize(i), e)).collect());
+                self.force_map()
+            },
+            Hoard::Deque(a) => {
+                *self = Hoard::Map(a.drain(..).enumerate().map(|(i, e)| (K::from_usize(i), e)).collect());
+                self.force_map()
+            },
+            Hoard::Map(a) => a,
+        }
+    }
+
+    pub fn update(&mut self, key: K, value: V) {
+        match self.get_mut(&key) {
+            Some(pos) => { *pos = value; }
+            None => {
+                self.force_map().insert(key, value);
+            }
         }
     }
 }
