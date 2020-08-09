@@ -2060,6 +2060,27 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let til_range_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_num,
+        coerce2: just_num,
+        func: |_, num1, num2| {
+            let n1 = num1.to_bigint().ok_or(PdError::BadFloat)?;
+            let n2 = num2.to_bigint().ok_or(PdError::BadFloat)?;
+            let vs = num_iter::range(n1, n2).map(|x| PdObj::from(num1.construct_like_self(x))).collect();
+            Ok(vec![pd_list(vs)])
+        },
+    });
+    let to_range_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_num,
+        coerce2: just_num,
+        func: |_, num1, num2| {
+            let n1 = num1.to_bigint().ok_or(PdError::BadFloat)?;
+            let n2 = num2.to_bigint().ok_or(PdError::BadFloat)?;
+            let vs = num_iter::range_inclusive(n1, n2).map(|x| PdObj::from(num1.construct_like_self(x))).collect();
+            Ok(vec![pd_list(vs)])
+        },
+    });
+
     // FIXME
     let organize_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
@@ -2102,6 +2123,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case]);
     add_cases("J", cc![one_range_case, zip_one_range_case]);
+    add_cases("…", cc![to_range_case]);
+    add_cases("¨", cc![til_range_case]);
+    add_cases("To", cc![to_range_case]);
+    add_cases("Tl", cc![til_range_case]);
 
     add_cases("Ø", cc![organize_case]);
 
