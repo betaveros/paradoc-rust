@@ -1081,6 +1081,19 @@ fn pd_filter_indices(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, ft
     Ok(acc)
 }
 
+fn pd_find_entry(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: FilterType) -> PdResult<(usize, PdObj)> {
+    let mut found = None;
+    yx_loop(env, it, |env, i, obj| {
+        if fty.accept(sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])?) {
+            found = Some((i, obj));
+            Err(PdError::Break)
+        } else {
+            Ok(())
+        }
+    })?;
+    found.ok_or(PdError::EmptyResult("find entry fail".to_string()))
+}
+
 struct OneBodyBlock {
     name: &'static str,
     body: Rc<dyn Block>,
@@ -2021,6 +2034,20 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![seq.pythonic_index(*index).ok_or(PdError::IndexError(index.to_string()))?.to_rc_pd_obj()])
         },
     });
+    let find_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Filter)?.1])
+        },
+    });
+    let find_not_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Reject)?.1])
+        },
+    });
     let len_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| { Ok(vec![(PdObj::from(seq.len()))]) },
@@ -2243,10 +2270,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases("÷", cc![intdiv_case]);
     add_cases("&", cc![bitand_case, intersection_case]);
     add_cases("|", cc![bitor_case, union_case]);
-    add_cases("^", cc![bitxor_case, symmetric_difference_case]);
+    add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
-    add_cases("=", cc![eq_case, index_case]);
+    add_cases("=", cc![eq_case, index_case, find_case]);
     add_cases("<", cc![lt_case, lt_slice_case]);
     add_cases(">", cc![gt_case, ge_slice_case]);
     add_cases("<m", cc![min_case]);

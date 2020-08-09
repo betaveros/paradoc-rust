@@ -8,6 +8,7 @@ pub enum PdError {
     NumericError(&'static str),
     UnhashableBlock(String),
     IndexError(String),
+    EmptyResult(String),
     BadComparison,
     BadParse,
     BadFloat,
