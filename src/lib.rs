@@ -21,7 +21,7 @@ mod string_util;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
-use crate::string_util::str_class;
+use crate::string_util::{str_class, int_groups, float_groups};
 
 #[derive(Debug)]
 pub struct TopEnvironment {
@@ -2151,6 +2151,18 @@ pub fn initialize(env: &mut Environment) {
         func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]),
     });
     add_cases("I", cc![trunc_case, string_to_int_case, iterate_case]);
+
+    let int_groups_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_string,
+        func: |_, s: &Rc<Vec<char>>| Ok(vec![pd_list(int_groups(&s.iter().collect::<String>()).map(|i| PdObj::from(i)).collect())]),
+    });
+    add_cases("Ig", cc![int_groups_case]);
+
+    let float_groups_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_string,
+        func: |_, s: &Rc<Vec<char>>| Ok(vec![pd_list(float_groups(&s.iter().collect::<String>()).map(|i| PdObj::from(i)).collect())]),
+    });
+    add_cases("Fg", cc![float_groups_case]);
 
     let to_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| Ok(vec![PdObj::from(env.to_string(a))]) });
     add_cases("S", cc![to_string_case]);
