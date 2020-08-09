@@ -54,6 +54,17 @@ impl PdNum {
         }
     }
 
+    pub fn repr(&self) -> String {
+        match self {
+            PdNum::Int(n)   => n.to_string(),
+            PdNum::Float(f) => f.to_string(),
+            // TODO as above
+            PdNum::Char(c)  => c.to_u32().and_then(std::char::from_u32).map_or_else(
+                || ".'".to_string() + &c.to_string(),
+                |ch| ['\'', ch].iter().collect::<String>())
+        }
+    }
+
     pub fn ceil(&self) -> PdNum {
         match self {
             PdNum::Int(_) => self.clone(),

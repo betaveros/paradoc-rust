@@ -281,7 +281,7 @@ impl Environment {
 
     fn to_repr_string(&self, obj: &PdObj) -> String {
         match obj {
-            PdObj::Num(n) => n.to_string(),
+            PdObj::Num(n) => n.repr(),
             PdObj::String(s) => format!("\"{}\"", &s.iter().collect::<String>()),
             PdObj::List(v) => format!("[{}]", v.iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")),
             PdObj::Block(b) => b.code_repr(),
@@ -2341,6 +2341,9 @@ pub fn initialize(env: &mut Environment) {
 
     let to_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| Ok(vec![PdObj::from(env.to_string(a))]) });
     add_cases("S", cc![to_string_case]);
+
+    let to_repr_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| Ok(vec![PdObj::from(env.to_repr_string(a))]) });
+    add_cases("`", cc![to_repr_string_case]);
 
     let replicate_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_any,
