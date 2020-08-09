@@ -422,6 +422,14 @@ impl From<ReadValue> for PdObj {
     }
 }
 
+fn bi_iverson(b: bool) -> BigInt { BigInt::from(if b { 1 } else { 0 }) }
+
+impl PdObj {
+    fn iverson(x: bool) -> Self {
+        PdObj::from(bi_iverson(x))
+    }
+}
+
 struct BuiltIn {
     name: String,
     func: fn(&mut Environment) -> PdUnit,
@@ -1283,7 +1291,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let seq = pop_seq_range_for(env, "all")?;
                 let res = pd_flat_fold_with_short_circuit(env, body, true,
                     |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
-                env.push(PdObj::from(bi_iverson(res)));
+                env.push(PdObj::iverson(res));
                 Ok(())
             }),
             "v" | "bindmap" | "vectorize" => obb("bindmap", bb, |env, body| {
@@ -1325,7 +1333,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             }),
             "ø" | "organize" => obb("organize", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "map")?;
-                let res = pd_organize_by(env, body, &seq)?;
+                let res = pd_organize_by(&seq, pd_key_projector(env, body))?;
                 env.push(res);
                 Ok(())
             }),
@@ -1753,7 +1761,18 @@ fn pd_seq_symmetric_difference(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     Ok(pd_build_like(bty, acc))
 }
 
-fn pd_organize_by_function<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+fn pd_key_projector<'a>(env: &'a mut Environment, func: &'a Rc<dyn Block>) -> impl FnMut(&PdObj) -> PdResult<PdKey> + 'a {
+    move |x| -> PdResult<PdKey> {
+        Ok(PdKey::List(Rc::new(
+            sandbox(env, func, vec![PdObj::clone(x)])?
+            .iter()
+            .map(|e| -> PdResult<Rc<PdKey>> { Ok(Rc::new(pd_key(e)?)) })
+            .collect::<PdResult<Vec<Rc<PdKey>>>>()?
+        )))
+    }
+}
+
+fn pd_organize_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
     let bty = seq.build_type();
     let mut key_order: Vec<PdKey> = Vec::new();
     let mut groups: HashMap<PdKey, Vec<PdObj>> = HashMap::new();
@@ -1769,22 +1788,33 @@ fn pd_organize_by_function<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where
         }
     }
 
+    // groups.remove() gives us ownership
     Ok(pd_list(key_order.iter().map(|key| pd_build_like(bty, groups.remove(key).expect("organize internal fail"))).collect()))
 }
 
-fn pd_organize(seq: &PdSeq) -> PdResult<PdObj> {
-    pd_organize_by_function(seq, pd_key)
+fn pd_sort_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let bty = seq.build_type();
+    // sort_by_cached_key is not enough because we also want to force the PdResult
+    let mut keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
+    // and sort_by_key's key function wants us to give ownership of the key :-/
+    keyed_vec.sort_by(|x, y| x.0.cmp(&y.0));
+
+    Ok(pd_build_like(bty, keyed_vec.into_iter().map(|x| x.1).collect()))
 }
 
-fn pd_organize_by(env: &mut Environment, func: &Rc<dyn Block>, seq: &PdSeq) -> PdResult<PdObj> {
-    pd_organize_by_function(seq, |x| -> PdResult<PdKey> {
-        Ok(PdKey::List(Rc::new(
-            sandbox(env, func, vec![PdObj::clone(x)])?
-            .iter()
-            .map(|e| -> PdResult<Rc<PdKey>> { Ok(Rc::new(pd_key(e)?)) })
-            .collect::<PdResult<Vec<Rc<PdKey>>>>()?
-        )))
-    })
+// TODO if this stabilizes https://github.com/rust-lang/rust/issues/53485
+fn pd_is_sorted_by<F>(seq: &PdSeq, mut proj: F, accept: fn(Ordering) -> bool) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let mut prev: Option<PdKey> = None;
+    for e in seq.iter() {
+        let cur = proj(&e)?;
+        if let Some(p) = prev {
+            if !accept(p.cmp(&cur)) {
+                return Ok(false)
+            }
+        }
+        prev = Some(cur);
+    }
+    Ok(true)
 }
 
 /*
@@ -1826,8 +1856,6 @@ def pd_seq_symmetric_difference(a: PdSeq, b: PdSeq) -> PdSeq:
             acc.append(element)
     return pd_build_like(a, acc)
 */
-
-fn bi_iverson(b: bool) -> BigInt { if b { BigInt::from(1) } else { BigInt::from(0) } }
 
 pub fn initialize(env: &mut Environment) {
     let plus_case = nn_n![a, b, a + b];
@@ -2085,7 +2113,69 @@ pub fn initialize(env: &mut Environment) {
     let organize_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![pd_organize(seq)?])
+            Ok(vec![pd_organize_by(seq, pd_key)?])
+        },
+    });
+    let organize_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![pd_organize_by(seq, pd_key_projector(env, block))?])
+        },
+    });
+
+    let sort_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_sort_by(seq, pd_key)?])
+        },
+    });
+    let sort_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![pd_sort_by(seq, pd_key_projector(env, block))?])
+        },
+    });
+
+    let is_sorted_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x != Ordering::Greater)?)])
+        },
+    });
+    let is_sorted_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x != Ordering::Greater)?)])
+        },
+    });
+
+    let is_strictly_increasing_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x == Ordering::Less)?)])
+        },
+    });
+    let is_strictly_increasing_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Less)?)])
+        },
+    });
+    let is_strictly_decreasing_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x == Ordering::Greater)?)])
+        },
+    });
+    let is_strictly_decreasing_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: just_block,
+        func: |env, seq, block| {
+            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
         },
     });
 
@@ -2128,7 +2218,11 @@ pub fn initialize(env: &mut Environment) {
     add_cases("To", cc![to_range_case]);
     add_cases("Tl", cc![til_range_case]);
 
-    add_cases("Ø", cc![organize_case]);
+    add_cases("Ø", cc![organize_case, organize_by_case]);
+    add_cases("$", cc![sort_case, sort_by_case]);
+    add_cases("$p", cc![is_sorted_case, is_sorted_by_case]);
+    add_cases("<p", cc![is_strictly_increasing_case, is_strictly_increasing_by_case]);
+    add_cases(">p", cc![is_strictly_decreasing_case, is_strictly_decreasing_by_case]);
 
     add_cases(":",   vec![juggle!(a -> a, a)]);
     add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);
@@ -2148,7 +2242,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("†", cc![pack_one_case]);
     let pack_two_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(vec![PdObj::clone(a), PdObj::clone(b)])]) });
     add_cases("‡", cc![pack_two_case]);
-    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(bi_iverson(!pd_truthy(a))))]) });
+    let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::iverson(!pd_truthy(a)))]) });
     add_cases("!", cc![not_case]);
 
     let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)?))]) });

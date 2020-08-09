@@ -35,6 +35,11 @@ fn test_list() {
 }
 
 #[test]
+fn bool_not() {
+    assert_eq!(paradoc::simple_eval("0! 1!"), intvec![1, 0]);
+}
+
+#[test]
 fn map() {
     assert_eq!(paradoc::simple_eval("[3 4])m"), vec![list(intvec![4, 5])]);
     assert_eq!(paradoc::simple_eval("[3 4]{Y+}%"), vec![list(intvec![3, 5])]);
@@ -98,4 +103,26 @@ fn looping() {
 #[test]
 fn organize() {
     assert_eq!(paradoc::simple_eval("5{2%}ø"), vec![list(vec![list(intvec![0, 2, 4]), list(intvec![1, 3])])]);
+}
+
+#[test]
+fn sort() {
+    assert_eq!(paradoc::simple_eval("[3 1 4 1 5]$"), vec![list(intvec![1, 1, 3, 4, 5])]);
+    assert_eq!(paradoc::simple_eval("[3 1 4 1 5]M_$"), vec![list(intvec![5, 4, 3, 1, 1])]);
+}
+
+#[test]
+fn is_sorted_by() {
+    assert_eq!(paradoc::simple_eval("[1 3 5]$p"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]$p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[4 4 8]$p"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[5 3 1]$p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[1 3 5]<p"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]<p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[4 4 8]<p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[5 3 1]<p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[1 3 5]>p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]>p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[4 4 8]>p"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[5 3 1]>p"), intvec![1]);
 }
