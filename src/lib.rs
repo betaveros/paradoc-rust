@@ -1006,7 +1006,7 @@ impl Block for DeepCharToCharBlock {
     }
 }
 
-fn yx_loop<F>(env: &mut Environment, it: PdIter, mut body: F) -> PdUnit where F: FnMut(&mut Environment, usize, PdObj) -> PdUnit {
+fn yx_loop<F>(env: &mut Environment, it: impl Iterator<Item=PdObj>, mut body: F) -> PdUnit where F: FnMut(&mut Environment, usize, PdObj) -> PdUnit {
     env.push_yx();
     let mut ret = Ok(());
     for (i, obj) in it.enumerate() {
@@ -1020,6 +1020,12 @@ fn yx_loop<F>(env: &mut Environment, it: PdIter, mut body: F) -> PdUnit where F:
     }
     env.pop_yx();
     ret
+}
+
+fn pd_loop(env: &mut Environment, func: &Rc<dyn Block>) -> PdUnit {
+    yx_loop(env, (0..).map(PdObj::from), |env, _, _| {
+        func.run(env)
+    })
 }
 
 fn pd_each(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdUnit {
@@ -1353,8 +1359,8 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(res);
                 Ok(())
             }),
-            "l" | "loop" => obb("loop", bb, |_env, _body| {
-                panic!("loop not implemented");
+            "l" | "loop" => obb("loop", bb, |env, body| {
+                pd_loop(env, body)
             }),
             "m" | "map" => obb("map", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "map")?;
@@ -2424,14 +2430,35 @@ pub fn initialize(env: &mut Environment) {
         Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
     });
 
+    let just_if_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_any,
+        coerce2: just_block,
+        func: |env, cond, block| {
+            if pd_truthy(&cond) {
+                block.run(env)?;
+            }
+            Ok(vec![])
+        },
+    });
+    let just_unless_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_any,
+        coerce2: just_block,
+        func: |env, cond, block| {
+            if !pd_truthy(&cond) {
+                block.run(env)?;
+            }
+            Ok(vec![])
+        },
+    });
+
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
     add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case]);
-    add_cases("&", cc![bitand_case, intersection_case]);
-    add_cases("|", cc![bitor_case, union_case]);
+    add_cases("&", cc![bitand_case, intersection_case, just_if_case]);
+    add_cases("|", cc![bitor_case, union_case, just_unless_case]);
     add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
@@ -2643,6 +2670,14 @@ pub fn initialize(env: &mut Environment) {
             println!("{}", env.to_string(&obj));
             Ok(())
         },
+    });
+    env.short_insert("Q", BuiltIn {
+        name: "Break".to_string(),
+        func: |_| Err(PdError::Break),
+    });
+    env.short_insert("K", BuiltIn {
+        name: "Continue".to_string(),
+        func: |_| Err(PdError::Continue),
     });
     env.short_insert("?", BuiltIn {
         name: "If_else".to_string(),
