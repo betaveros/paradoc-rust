@@ -1049,11 +1049,32 @@ fn pd_flat_fold<B, F>(env: &mut Environment, func: &Rc<dyn Block>, init: B, body
     Ok(acc)
 }
 
-fn pd_filter(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
+enum FilterType { Filter, Reject }
+impl FilterType {
+    fn accept(&self, b: bool) -> bool {
+        match self {
+            FilterType::Filter => b,
+            FilterType::Reject => !b,
+        }
+    }
+}
+
+fn pd_filter(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: FilterType) -> PdResult<Vec<PdObj>> {
     let mut acc = Vec::new();
     yx_loop(env, it, |env, _, obj| {
-        if sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])? {
+        if fty.accept(sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])?) {
             acc.push(obj)
+        }
+        Ok(())
+    })?;
+    Ok(acc)
+}
+
+fn pd_filter_indices(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: FilterType) -> PdResult<Vec<PdObj>> {
+    let mut acc = Vec::new();
+    yx_loop(env, it, |env, i, obj| {
+        if fty.accept(sandbox_truthy(env, &func, vec![obj])?) {
+            acc.push(PdObj::from(i))
         }
         Ok(())
     })?;
@@ -1235,8 +1256,14 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 Ok(())
             }),
             "f" | "filter" => obb("filter", bb, |env, body| {
-                let seq = pop_seq_range_for(env, "map")?;
-                let res = pd_filter(env, body, seq.iter())?;
+                let seq = pop_seq_range_for(env, "filter")?;
+                let res = pd_filter(env, body, seq.iter(), FilterType::Filter)?;
+                env.push(pd_list(res));
+                Ok(())
+            }),
+            "j" | "reject" => obb("reject", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "reject")?;
+                let res = pd_filter(env, body, seq.iter(), FilterType::Reject)?;
                 env.push(pd_list(res));
                 Ok(())
             }),
@@ -1954,6 +1981,35 @@ pub fn initialize(env: &mut Environment) {
         }
     });
 
+    let filter_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_block,
+        coerce2: seq_range,
+        func: |env, a, b| {
+            Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Filter)?)])
+        }
+    });
+    let filter_indices_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_block,
+        coerce2: seq_range,
+        func: |env, a, b| {
+            Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Filter)?)])
+        }
+    });
+    let reject_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_block,
+        coerce2: seq_range,
+        func: |env, a, b| {
+            Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Reject)?)])
+        }
+    });
+    let reject_indices_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_block,
+        coerce2: seq_range,
+        func: |env, a, b| {
+            Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Reject)?)])
+        }
+    });
+
     let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(a * a))]) });
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
@@ -2179,8 +2235,8 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
-    add_cases("+", cc![plus_case, cat_list_case]);
-    add_cases("-", cc![minus_case, set_difference_case]);
+    add_cases("+", cc![plus_case, cat_list_case, filter_case]);
+    add_cases("-", cc![minus_case, set_difference_case, reject_case]);
     add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
@@ -2211,8 +2267,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases("»", cc![inc2_case, rest_case]);
     add_cases("²", cc![square_case]);
     add_cases(" r", cc![space_join_case]);
-    add_cases(",", cc![range_case, zip_range_case]);
-    add_cases("J", cc![one_range_case, zip_one_range_case]);
+    add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);
+    add_cases("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
     add_cases("…", cc![to_range_case]);
     add_cases("¨", cc![til_range_case]);
     add_cases("To", cc![to_range_case]);
