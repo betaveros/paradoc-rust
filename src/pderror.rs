@@ -13,6 +13,7 @@ pub enum PdError {
     BadParse,
     BadFloat,
     EmptyReduceIntermediate,
+    InvalidHoardOperation,
     Break,
     Continue,
 }

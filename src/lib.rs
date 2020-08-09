@@ -11,6 +11,7 @@ use num::bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
 use std::collections::{HashSet, HashMap};
+use std::cell::RefCell;
 
 mod lex;
 mod pdnum;
@@ -18,10 +19,12 @@ mod pderror;
 mod input;
 mod slice_util;
 mod string_util;
+mod hoard;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
 use crate::string_util::{str_class, int_groups, float_groups};
+use crate::hoard::Hoard;
 
 #[derive(Debug)]
 pub struct TopEnvironment {
@@ -275,6 +278,7 @@ impl Environment {
             PdObj::Num(n) => n.to_string(),
             PdObj::String(s) => s.iter().collect::<String>(),
             PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
+            PdObj::Hoard(h) => h.borrow().iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
             PdObj::Block(b) => b.code_repr(),
         }
     }
@@ -284,6 +288,7 @@ impl Environment {
             PdObj::Num(n) => n.repr(),
             PdObj::String(s) => format!("\"{}\"", &s.iter().collect::<String>()),
             PdObj::List(v) => format!("[{}]", v.iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")),
+            PdObj::Hoard(h) => format!("Hoard({})", h.borrow().iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")), // FIXME dicts are gone
             PdObj::Block(b) => b.code_repr(),
         }
     }
@@ -343,6 +348,7 @@ pub enum PdObj {
     String(Rc<Vec<char>>),
     List(Rc<Vec<PdObj>>),
     Block(Rc<dyn Block>),
+    Hoard(Rc<RefCell<Hoard<PdKey, PdObj>>>),
 }
 
 impl PartialEq for PdObj {
@@ -408,6 +414,11 @@ impl From<String> for PdObj {
 impl From<&str> for PdObj {
     fn from(s: &str) -> Self {
         PdObj::String(Rc::new(s.chars().collect()))
+    }
+}
+impl From<Hoard<PdKey, PdObj>> for PdObj {
+    fn from(h: Hoard<PdKey, PdObj>) -> Self {
+        PdObj::Hoard(Rc::new(RefCell::new(h)))
     }
 }
 impl From<ReadValue> for PdObj {
@@ -1467,6 +1478,7 @@ fn apply_on(env: &mut Environment, obj: PdObj) -> PdUnit {
         PdObj::Num(_)    => { env.push(obj); Ok(()) }
         PdObj::String(_) => { env.push(obj); Ok(()) }
         PdObj::List(_)   => { env.push(obj); Ok(()) }
+        PdObj::Hoard(_)  => { env.push(obj); Ok(()) }
         PdObj::Block(bb) => bb.run(env),
     }
 }
@@ -1527,6 +1539,7 @@ fn pd_truthy(x: &PdObj) -> bool {
         PdObj::Num(n) => n.is_nonzero(),
         PdObj::String(s) => !s.is_empty(),
         PdObj::List(v) => !v.is_empty(),
+        PdObj::Hoard(h) => !h.borrow().is_empty(),
         PdObj::Block(_) => true,
     }
 }
@@ -1536,6 +1549,7 @@ fn pd_deep_length(x: &PdObj) -> PdResult<usize> {
         PdObj::Num(_) => Ok(1),
         PdObj::String(ss) => Ok(ss.len()),
         PdObj::List(v) => v.iter().map(|x| pd_deep_length(&*x)).sum(),
+        PdObj::Hoard(h) => h.borrow().iter().map(|x| pd_deep_length(&*x)).sum(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep length can't block".to_string())),
     }
 }
@@ -1545,6 +1559,7 @@ fn pd_deep_sum(x: &PdObj) -> PdResult<PdNum> {
         PdObj::Num(n) => Ok((&**n).clone()),
         PdObj::String(ss) => Ok(PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32)).sum())),
         PdObj::List(v) => v.iter().map(|x| pd_deep_sum(&*x)).sum(),
+        PdObj::Hoard(h) => h.borrow().iter().map(|x| pd_deep_sum(&*x)).sum(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep sum can't block".to_string())),
     }
 }
@@ -1554,6 +1569,7 @@ fn pd_deep_square_sum(x: &PdObj) -> PdResult<PdNum> {
         PdObj::Num(n) => Ok(&**n * &**n),
         PdObj::String(ss) => Ok(PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32).pow(2u32)).sum())),
         PdObj::List(v) => v.iter().map(|x| pd_deep_square_sum(&*x)).sum(),
+        PdObj::Hoard(h) => h.borrow().iter().map(|x| pd_deep_square_sum(&*x)).sum(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep square sum can't block".to_string())),
     }
 }
@@ -1570,6 +1586,7 @@ fn pd_deep_product(x: &PdObj) -> PdResult<PdNum> {
         PdObj::Num(n) => Ok((&**n).clone()),
         PdObj::String(ss) => Ok(PdNum::Char(ss.iter().map(|x| BigInt::from(*x as u32)).product())),
         PdObj::List(v) => v.iter().map(|x| pd_deep_product(&*x)).product(),
+        PdObj::Hoard(h) => h.borrow().iter().map(|x| pd_deep_product(&*x)).product(),
         PdObj::Block(_) => Err(PdError::BadArgument("deep product can't block".to_string())),
     }
 }
@@ -1655,7 +1672,7 @@ fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdObj
     }, a)
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub enum PdKey {
     Num(PdTotalNum),
     String(Rc<Vec<char>>),
@@ -1666,7 +1683,10 @@ fn pd_key(obj: &PdObj) -> PdResult<PdKey> {
     match obj {
         PdObj::Num(x) => Ok(PdKey::Num(PdTotalNum(Rc::clone(x)))),
         PdObj::String(x) => Ok(PdKey::String(Rc::clone(x))),
-        PdObj::List(x) => Ok(PdKey::List(Rc::new(x.iter().map(|k| Ok(Rc::new(pd_key(&*k)?))).collect::<PdResult<Vec<Rc<PdKey>>>>()?))),
+        PdObj::List(x) => Ok(PdKey::List(Rc::new(x.iter().map(|k| Ok(Rc::new(pd_key(k)?))).collect::<PdResult<Vec<Rc<PdKey>>>>()?))),
+        PdObj::Hoard(h) => Ok(PdKey::List(Rc::new(
+            h.borrow().iter().map(|k| Ok(Rc::new(pd_key(k)?))).collect::<PdResult<Vec<Rc<PdKey>>>>()?
+        ))),
         PdObj::Block(b) => Err(PdError::UnhashableBlock(b.code_repr())),
     }
 }
@@ -2341,6 +2361,7 @@ pub fn initialize(env: &mut Environment) {
     });
     add_cases("°", cc![replicate_case]);
 
+    env.short_insert("H", Hoard::new());
 
     // env.variables.insert("X".to_string(), (PdObj::Int(3.to_bigint().unwrap())));
     env.short_insert("N", '\n');
