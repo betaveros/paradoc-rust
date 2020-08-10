@@ -9,3 +9,11 @@ I don't think this implementation will replace the original or even necessarily 
 3. I wanted to learn Rust, so why not. (This is my first Rust project.)
 
 I might expound on this somewhere later.
+
+## extremely unscientific speed benchmark
+
+My Advent of Code Day 5 Part 2 program takes this long to run on these interpreters:
+
+- paradoc (python): 143s
+- paradoc-rust (debug build): 65s
+- paradoc-rust (release build): 3.1s
