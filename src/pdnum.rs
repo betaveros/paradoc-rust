@@ -245,6 +245,9 @@ impl PdNum {
     pub fn through_float<F>(&self, f: F) -> PdNum where F: FnOnce(f64) -> f64 {
         PdNum::Float(f(self.to_f64().expect("can't through float")))
     }
+
+    pub fn iverson(b: bool) -> Self { PdNum::from(if b { 1 } else { 0 }) }
+
 }
 
 // this seems... nontrivial??

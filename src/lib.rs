@@ -445,11 +445,9 @@ impl From<ReadValue> for PdObj {
     }
 }
 
-fn bi_iverson(b: bool) -> BigInt { BigInt::from(if b { 1 } else { 0 }) }
-
 impl PdObj {
     fn iverson(x: bool) -> Self {
-        PdObj::from(bi_iverson(x))
+        PdObj::from(PdNum::iverson(x))
     }
 }
 
@@ -817,6 +815,12 @@ fn just_block(obj: &PdObj) -> Option<Rc<dyn Block>> {
     match obj {
         PdObj::Block(a) => Some(Rc::clone(a)),
         _ => None,
+    }
+}
+fn always_seq_or_singleton(obj: &PdObj) -> PdSeq {
+    match just_seq(obj) {
+        Some(v) => v,
+        None => PdSeq::List(Rc::new(vec![PdObj::clone(obj)])),
     }
 }
 
@@ -1455,6 +1459,32 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(PdObj::iverson(res));
                 Ok(())
             }),
+            "ê" | "exists" => obb("exists", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "exists")?;
+                let res = pd_flat_fold_with_short_circuit(env, body, false,
+                    |_, o| { if pd_truthy(&o) { Ok((true, true)) } else { Ok((false, false)) } }, seq.iter())?;
+                env.push(PdObj::iverson(res));
+                Ok(())
+            }),
+            "ô" | "none" => obb("none", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "none")?;
+                let res = pd_flat_fold_with_short_circuit(env, body, true,
+                    |_, o| { if pd_truthy(&o) { Ok((false, true)) } else { Ok((true, false)) } }, seq.iter())?;
+                env.push(PdObj::iverson(res));
+                Ok(())
+            }),
+            "î" | "identical" => obb("identical", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "identical")?;
+                let res = pd_identical_by(&seq, pd_key_projector(env, body))?;
+                env.push(PdObj::iverson(res));
+                Ok(())
+            }),
+            "û" | "unique" => obb("unique", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "unique")?;
+                let res = pd_unique_by(&seq, pd_key_projector(env, body))?;
+                env.push(PdObj::iverson(res));
+                Ok(())
+            }),
             "v" | "bindmap" | "vectorize" => obb("bindmap", bb, |env, body| {
                 let b = env.pop_result("bindmap nothing to bind")?;
                 let bb: Rc<dyn Block> = Rc::new(BindBlock {
@@ -2087,45 +2117,31 @@ fn pd_is_sorted_by<F>(seq: &PdSeq, mut proj: F, accept: fn(Ordering) -> bool) ->
     Ok(true)
 }
 
-/*
-def pd_seq_intersection(a: PdSeq, b: PdSeq) -> PdSeq:
-    counter = collections.Counter(pykey(e) for e in pd_iterable(b))
-    acc: List[PdObject] = []
-    for element in pd_iterable(a):
-        key = pykey(element)
-        if counter[key] > 0:
-            acc.append(element)
-            counter[key] -= 1
-    return pd_build_like(a, acc)
-def pd_seq_union(a: PdSeq, b: PdSeq) -> PdSeq:
-    acc: List[PdObject] = list(pd_iterable(a))
-    counter = collections.Counter(pykey(e) for e in pd_iterable(a))
-    for element in pd_iterable(b):
-        key = pykey(element)
-        if counter[key] > 0:
-            counter[key] -= 1
-        else:
-            acc.append(element)
-    return pd_build_like(a, acc)
-def pd_seq_difference(a: PdSeq, b: PdSeq) -> PdSeq:
-    set_b = set(pykey(e) for e in pd_iterable(b))
-    acc: List[PdObject] = []
-    for element in pd_iterable(a):
-        if pykey(element) not in set_b:
-            acc.append(element)
-    return pd_build_like(a, acc)
-def pd_seq_symmetric_difference(a: PdSeq, b: PdSeq) -> PdSeq:
-    set_a = collections.Counter(pykey(e) for e in pd_iterable(a))
-    set_b = collections.Counter(pykey(e) for e in pd_iterable(b))
-    acc: List[PdObject] = []
-    for element in pd_iterable(a):
-        if pykey(element) not in set_b:
-            acc.append(element)
-    for element in pd_iterable(b):
-        if pykey(element) not in set_a:
-            acc.append(element)
-    return pd_build_like(a, acc)
-*/
+// TODO: we don't need to hash here, this could take a PdObj projection, but I'm too lazy
+fn pd_identical_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let mut acc: Option<PdKey> = None;
+    for obj in seq.iter() {
+        match &acc {
+            None => { acc = Some(proj(&obj)?); }
+            Some(k) => {
+                if k != &proj(&obj)? { return Ok(false) }
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn pd_unique_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let mut acc = HashSet::new();
+    for obj in seq.iter() {
+        let key = proj(&obj)?;
+        if acc.contains(&key) {
+            return Ok(false);
+        }
+        acc.insert(key);
+    }
+    Ok(true)
+}
 
 pub fn initialize(env: &mut Environment) {
     let plus_case = nn_n![a, b, a + b];
@@ -2151,10 +2167,17 @@ pub fn initialize(env: &mut Environment) {
     let neg_case    = n_n![a, -a];
     let signum_case = n_n![a, a.signum()];
     let trunc_case  = n_n![a, a.trunc()];
+    let equals_one_case = n_n![a, PdNum::iverson(a == &PdNum::from(1))];
+    let positive_case = n_n![a, PdNum::iverson(a > &PdNum::from(0))];
+    let negative_case = n_n![a, PdNum::iverson(a < &PdNum::from(0))];
+    let positive_or_zero_case = n_n![a, PdNum::iverson(a >= &PdNum::from(0))];
+    let negative_or_zero_case = n_n![a, PdNum::iverson(a <= &PdNum::from(0))];
+    let even_case = n_n![a, PdNum::iverson(a % &PdNum::from(2) == PdNum::from(0))];
+    let odd_case  = n_n![a, PdNum::iverson(a % &PdNum::from(1) == PdNum::from(0))];
 
-    let eq_case = nn_n![a, b, PdNum::Int(bi_iverson(a == b))];
-    let lt_case = nn_n![a, b, PdNum::Int(bi_iverson(a < b))];
-    let gt_case = nn_n![a, b, PdNum::Int(bi_iverson(a > b))];
+    let eq_case = nn_n![a, b, PdNum::iverson(a == b)];
+    let lt_case = nn_n![a, b, PdNum::iverson(a < b)];
+    let gt_case = nn_n![a, b, PdNum::iverson(a > b)];
     let min_case = nn_n![a, b, PdNum::clone(a.min(b))];
     let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
@@ -2350,6 +2373,42 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_seq_symmetric_difference(seq1, seq2)?])
         },
     });
+    let all_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(seq.iter().all(|e| pd_truthy(&e)))])
+        },
+    });
+    let any_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(seq.iter().any(|e| pd_truthy(&e)))])
+        },
+    });
+    let not_all_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(!seq.iter().all(|e| pd_truthy(&e)))])
+        },
+    });
+    let not_any_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(!seq.iter().any(|e| pd_truthy(&e)))])
+        },
+    });
+    let identical_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(pd_identical_by(&seq, pd_key)?)])
+        },
+    });
+    let unique_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![PdObj::iverson(pd_unique_by(&seq, pd_key)?)])
+        },
+    });
 
     let range_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_num,
@@ -2365,6 +2424,20 @@ pub fn initialize(env: &mut Environment) {
             let n = num.to_bigint().ok_or(PdError::BadFloat)?;
             let vs = num_iter::range_inclusive(BigInt::from(1), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
+        },
+    });
+    let down_one_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_num,
+        func: |_, num| {
+            let n = num.to_bigint().ok_or(PdError::BadFloat)?;
+            let vs = num_iter::range_inclusive(BigInt::from(1), n).rev().map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            Ok(vec![pd_list(vs)])
+        },
+    });
+    let map_down_singleton_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.iter().map(|e| always_seq_or_singleton(&e).rev_copy().to_rc_pd_obj()).collect())])
         },
     });
     let zip_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -2506,6 +2579,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);
     add_cases("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
+    add_cases("Ð", cc![down_one_range_case, map_down_singleton_case]);
     add_cases("…", cc![to_range_case]);
     add_cases("¨", cc![til_range_case]);
     add_cases("To", cc![to_range_case]);
@@ -2516,6 +2590,22 @@ pub fn initialize(env: &mut Environment) {
     add_cases("$p", cc![is_sorted_case, is_sorted_by_case]);
     add_cases("<p", cc![is_strictly_increasing_case, is_strictly_increasing_by_case]);
     add_cases(">p", cc![is_strictly_decreasing_case, is_strictly_decreasing_by_case]);
+    add_cases("Â", cc![positive_case, all_case]);
+    add_cases("Ê", cc![even_case, any_case]);
+    add_cases("Î", cc![equals_one_case, identical_case]);
+    add_cases("Ô", cc![not_any_case]);
+    add_cases("Û", cc![negative_case, unique_case]);
+    add_cases("Al", cc![all_case]);
+    add_cases("Ay", cc![any_case]);
+    add_cases("Na", cc![not_all_case]);
+    add_cases("Ne", cc![not_any_case]);
+    add_cases("=p", cc![identical_case]);
+    add_cases("Ev", cc![even_case]);
+    add_cases("Od", cc![odd_case]);
+    add_cases("+p", cc![positive_case]);
+    add_cases("-p", cc![negative_case]);
+    add_cases("+o", cc![positive_or_zero_case]);
+    add_cases("-o", cc![negative_or_zero_case]);
 
     add_cases(":",   vec![juggle!(a -> a, a)]);
     add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);
@@ -2748,6 +2838,11 @@ pub fn initialize(env: &mut Environment) {
     env.short_insert("Ú", DeepZipBlock {
         func: |a, b| a % b,
         name: "mod".to_string(),
+    });
+
+    env.short_insert("±", DeepZipBlock {
+        func: |a, b| (a - b).abs(),
+        name: "absdiff".to_string(),
     });
 
     macro_rules! forward_f64 {
