@@ -2717,6 +2717,38 @@ pub fn initialize(env: &mut Environment) {
         func: |a, b| a + b,
         name: "plus".to_string(),
     });
+    env.short_insert("À", DeepZipBlock {
+        func: |a, b| a - b,
+        name: "minus".to_string(),
+    });
+    env.short_insert("È", DeepNumToNumBlock {
+        func: |a| a * a,
+        name: "square".to_string(),
+    });
+    env.short_insert("É", DeepNumToNumBlock {
+        func: |a| PdNum::from(2).pow_num(a),
+        name: "pow2".to_string(),
+    });
+    env.short_insert("Ì", DeepNumToNumBlock {
+        func: |a| -a,
+        name: "negate".to_string(),
+    });
+    env.short_insert("Í", DeepNumToNumBlock {
+        func: |a| &PdNum::from(1)/a,
+        name: "invert".to_string(),
+    });
+    env.short_insert("Ò", DeepZipBlock {
+        func: |a, b| a * b,
+        name: "times".to_string(),
+    });
+    env.short_insert("Ó", DeepZipBlock {
+        func: |a, b| a / b,
+        name: "divide".to_string(),
+    });
+    env.short_insert("Ú", DeepZipBlock {
+        func: |a, b| a % b,
+        name: "mod".to_string(),
+    });
 
     macro_rules! forward_f64 {
         ($name:expr, $fname:ident) => {
