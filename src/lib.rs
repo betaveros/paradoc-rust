@@ -943,6 +943,27 @@ impl Block for CasedBuiltIn {
     }
 }
 
+struct DeepNumToNumBlock {
+    func: fn(&PdNum) -> PdNum,
+    name: String,
+}
+impl Debug for DeepNumToNumBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "DeepNumToNumBlock {{ func: ???, name: {:?} }}", self.name)
+    }
+}
+impl Block for DeepNumToNumBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let a = env.pop_result("deep num to num no stack")?;
+        let res = pd_deep_map(&self.func, &a);
+        env.push(res);
+        Ok(())
+    }
+    fn code_repr(&self) -> String {
+        String::clone(&self.name) + "_deep_num_to_num"
+    }
+}
+
 struct DeepBinaryOpBlock {
     func: fn(&PdNum, &PdNum) -> PdNum,
     other: PdNum,
@@ -2696,6 +2717,39 @@ pub fn initialize(env: &mut Environment) {
         func: |a, b| a + b,
         name: "plus".to_string(),
     });
+
+    macro_rules! forward_f64 {
+        ($name:expr, $fname:ident) => {
+            env.short_insert($name, DeepNumToNumBlock {
+                func: |a| a.through_float(f64::$fname),
+                name: stringify!($fname).to_string(),
+            });
+        }
+    }
+    forward_f64!("Sn", sin);
+    forward_f64!("Cs", cos);
+    forward_f64!("Tn", tan);
+    forward_f64!("As", asin);
+    forward_f64!("Ac", acos);
+    forward_f64!("At", atan);
+    env.short_insert("Sc", DeepNumToNumBlock {
+        func: |a| a.through_float(|f| 1.0/f.cos()),
+        name: "Sec".to_string(),
+    });
+    env.short_insert("Cc", DeepNumToNumBlock {
+        func: |a| a.through_float(|f| 1.0/f.sin()),
+        name: "Csc".to_string(),
+    });
+    env.short_insert("Ct", DeepNumToNumBlock {
+        func: |a| a.through_float(|f| 1.0/f.tan()),
+        name: "Cot".to_string(),
+    });
+    forward_f64!("As", asin);
+    forward_f64!("Ef", exp);
+    forward_f64!("Ln", ln);
+    forward_f64!("Lt", log10);
+    forward_f64!("Lg", log2);
+
     env.short_insert("Uc", DeepCharToCharBlock {
         func: |a| a.to_uppercase().next().expect("uppercase :("), // FIXME uppercasing chars can produce more than one!
         name: "uppercase".to_string(),

@@ -241,6 +241,10 @@ impl PdNum {
             PdNum::Char(_)  => PdNum::Char(n),
         }
     }
+
+    pub fn through_float<F>(&self, f: F) -> PdNum where F: FnOnce(f64) -> f64 {
+        PdNum::Float(f(self.to_f64().expect("can't through float")))
+    }
 }
 
 // this seems... nontrivial??
