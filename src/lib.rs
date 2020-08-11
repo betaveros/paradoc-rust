@@ -225,9 +225,8 @@ impl Environment {
         x_stack[len - 1] = x;
     }
     fn pop_yx(&mut self) {
-        let x_stack = self.borrow_x_stack_mut();
-        x_stack.pop().expect("m8 pop_yx");
-        x_stack.pop().expect("m8 pop_yx");
+        self.pop_x();
+        self.pop_x();
     }
 
     fn short_insert(&mut self, name: &str, obj: impl Into<PdObj>) {
@@ -327,13 +326,13 @@ impl Environment {
             shadow: Ok(ShadowState { env: Box::new(env), arity: 0, shadow_type }),
         };
 
-        let ret = body(&mut benv)?;
+        let ret_result = body(&mut benv);
 
         let shadow = benv.shadow.expect("Bracketed shadow disappeared!?!?");
         let arity = shadow.arity;
         *self = *(shadow.env);
 
-        Ok((ret, arity))
+        Ok((ret_result?, arity))
     }
 }
 
