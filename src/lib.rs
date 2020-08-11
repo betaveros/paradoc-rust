@@ -11,6 +11,7 @@ use num::bigint::BigInt;
 use num::Integer;
 use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
+use num_traits::identities::Zero;
 use std::collections::{HashSet, HashMap};
 use std::cell::RefCell;
 use rand;
@@ -371,6 +372,7 @@ impl PartialEq for PdObj {
             (PdObj::Num   (a), PdObj::Num   (b)) => a == b,
             (PdObj::String(a), PdObj::String(b)) => a == b,
             (PdObj::List  (a), PdObj::List  (b)) => a == b,
+            (PdObj::Hoard (a), PdObj::Hoard (b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -508,6 +510,12 @@ impl Case for TernaryAnyCase {
     }
 }
 
+fn just_value(obj: &PdObj) -> Option<PdObj> {
+    match obj {
+        PdObj::Block(_) => None,
+        _ => Some(PdObj::clone(obj)),
+    }
+}
 fn just_any(obj: &PdObj) -> Option<PdObj> {
     Some(PdObj::clone(obj))
 }
@@ -1250,6 +1258,36 @@ fn pd_filter_indices(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, ft
     Ok(acc)
 }
 
+fn pd_count_equal(it: PdIter, obj: &PdObj) -> usize {
+    let mut count = 0usize;
+    for e in it {
+        if obj == &e {
+            count += 1
+        }
+    }
+    count
+}
+
+fn pd_count_by(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: FilterType) -> PdResult<usize> {
+    let mut count = 0usize;
+    yx_loop(env, it, |env, _, obj| {
+        if fty.accept(sandbox_truthy(env, &func, vec![obj])?) {
+            count += 1
+        }
+        Ok(())
+    })?;
+    Ok(count)
+}
+
+fn pd_find_index_equal(it: PdIter, obj: &PdObj) -> Option<usize> {
+    for (i, e) in it.enumerate() {
+        if obj == &e {
+            return Some(i)
+        }
+    }
+    None
+}
+
 fn pd_find_entry(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: FilterType) -> PdResult<(usize, PdObj)> {
     let mut found = None;
     yx_loop(env, it, |env, i, obj| {
@@ -1436,7 +1474,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
             }
             "b" | "bits" => match &**n {
-                PdNum::Int(i) => Ok((pd_list(b.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
+                PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
                 _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
             }
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
@@ -2445,6 +2483,71 @@ pub fn initialize(env: &mut Environment) {
     let find_not_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
         Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Reject)?.1])
     });
+    let find_index_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![PdObj::from(pd_find_entry(env, block, seq.iter(), FilterType::Filter)?.0)])
+    });
+    let count_factors_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: num_to_bigint,
+        coerce2: num_to_bigint,
+        func: |_, haystack, needle| {
+            Ok(vec![if needle.is_zero() {
+                PdObj::from(0)
+            } else if needle == &BigInt::from(1) || needle == &BigInt::from(-1) {
+                PdObj::from(f64::INFINITY)
+            } else {
+                let ret = 0;
+                let mut x = BigInt::clone(haystack);
+                while (&x % needle).is_zero() {
+                    x /= needle;
+                }
+                PdObj::from(ret)
+            }])
+        },
+    });
+    let count_str_str_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_string,
+        coerce2: just_string,
+        func: |_, haystack, needle| {
+            // FIXME slow idk
+            let mut acc = 0usize;
+            for w in slice_util::sliding_window(haystack, needle.len()) {
+                if w == needle.as_slice() {
+                    acc += 1;
+                }
+            }
+            Ok(vec![PdObj::from(acc)])
+        },
+    });
+    let find_index_str_str_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_string,
+        coerce2: just_string,
+        func: |_, haystack, needle| {
+            // FIXME slow idk
+            for (i, w) in slice_util::sliding_window(haystack, needle.len()).iter().enumerate() {
+                if w == &needle.as_slice() {
+                    return Ok(vec![PdObj::from(i)]);
+                }
+            }
+            Ok(vec![PdObj::from(-1)])
+        },
+    });
+    let count_equal_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: just_value,
+        func: |_, seq, obj| {
+            Ok(vec![PdObj::from(pd_count_equal(seq.iter(), obj))])
+        },
+    });
+    let count_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![PdObj::from(pd_count_by(env, block, seq.iter(), FilterType::Filter)?)])
+    });
+    let find_index_equal_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: just_value,
+        func: |_, seq, obj| {
+            Ok(vec![pd_find_index_equal(seq.iter(), obj).map_or(PdObj::from(-1), PdObj::from)])
+        },
+    });
     let hoard_len_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_hoard,
         func: |_, hoard| { Ok(vec![(PdObj::from(hoard.borrow().len()))]) },
@@ -2801,6 +2904,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
     add_cases("=", cc![index_hoard_case, eq_case, index_case, find_case]);
+    add_cases("@", cc![find_index_str_str_case, find_index_equal_case, find_index_case]);
+    add_cases("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
     add_cases("<", cc![lt_case, lt_slice_case]);
     add_cases(">", cc![gt_case, ge_slice_case]);
     add_cases("<c", cc![cycle_left_case]);
