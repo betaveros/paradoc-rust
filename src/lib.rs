@@ -695,6 +695,16 @@ impl PdSeq {
         }
     }
 
+    fn pythonic_split_right(&self, index: isize) -> PdSeq {
+        let uindex = self.pythonic_clamp_slice_index(index);
+
+        match self {
+            PdSeq::List(v) => PdSeq::List(Rc::new(v.split_at(uindex).1.to_vec())),
+            PdSeq::String(s) => PdSeq::String(Rc::new(s.split_at(uindex).1.to_vec())),
+            PdSeq::Range(a, b) => PdSeq::Range(a + uindex, BigInt::clone(b)),
+        }
+    }
+
     fn pythonic_mod_slice(&self, modulus: isize) -> PdResult<PdSeq> {
         match self {
             PdSeq::List(v) => Ok(PdSeq::List(Rc::new(slice_util::pythonic_mod_slice(&**v, modulus).ok_or(PdError::IndexError("mod slice sad".to_string()))?.iter().cloned().cloned().collect()))),
@@ -733,15 +743,16 @@ impl PdSeq {
         self.dual_apply(PdSeq::help_cycle_left(&-amt), PdSeq::help_cycle_left(&-amt))
     }
 
-    fn pythonic_split_right(&self, index: isize) -> PdSeq {
-        let uindex = self.pythonic_clamp_slice_index(index);
-
-        match self {
-            PdSeq::List(v) => PdSeq::List(Rc::new(v.split_at(uindex).1.to_vec())),
-            PdSeq::String(s) => PdSeq::String(Rc::new(s.split_at(uindex).1.to_vec())),
-            PdSeq::Range(a, b) => PdSeq::Range(a + uindex, BigInt::clone(b)),
+    fn help_repeat<T: Clone>(amt: usize) -> impl Fn(&Vec<T>) -> Vec<T> {
+        move |v| {
+            std::iter::repeat(v).take(amt).flatten().cloned().collect()
         }
     }
+
+    fn repeat(&self, amt: usize) -> PdSeq {
+        self.dual_apply(PdSeq::help_repeat(amt), PdSeq::help_repeat(amt))
+    }
+
 
     // TODO: expensive idk scary
     // it's probably fine but want to make sure it's necessary and I don't accidentally compose it
@@ -2213,6 +2224,31 @@ fn pd_unique_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&P
     Ok(true)
 }
 
+fn pd_uniquify_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let mut acc = Vec::new();
+    let mut seen = HashSet::new();
+    for obj in seq.iter() {
+        let key = proj(&obj)?;
+        if !seen.contains(&key) {
+            acc.push(obj);
+        }
+        seen.insert(key);
+    }
+    Ok(pd_build_like(seq.build_type(), acc))
+}
+
+fn pd_first_duplicate_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let mut acc = HashSet::new();
+    for obj in seq.iter() {
+        let key = proj(&obj)?;
+        if acc.contains(&key) {
+            return Ok(obj);
+        }
+        acc.insert(key);
+    }
+    Err(PdError::BadList("no duplicates"))
+}
+
 fn pd_mul_div_const(env: &mut Environment, obj: &PdObj, mul: usize, div: usize) -> PdResult<Vec<PdObj>> {
     match obj {
         PdObj::Num(n) => {
@@ -2360,6 +2396,9 @@ pub fn initialize(env: &mut Environment) {
     let map_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         Ok(vec![pd_map(env, a, b)?])
     });
+    let xloop_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        pd_xloop(env, a, b.iter())?; Ok(vec![])
+    });
 
     let filter_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         Ok(vec![pd_list(pd_filter(env, a, b.iter(), FilterType::Filter)?)])
@@ -2457,6 +2496,13 @@ pub fn initialize(env: &mut Environment) {
         coerce: seq_range,
         func: |_, seq| {
             Ok(vec![seq.cycle_right(&BigInt::from(1)).to_rc_pd_obj()])
+        },
+    });
+    let repeat_seq_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_clamped_usize,
+        func: |_, a, n| {
+            Ok(vec![a.repeat(*n).to_rc_pd_obj()])
         },
     });
     let seq_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -2585,6 +2631,18 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_seq,
         func: |_, seq| {
             Ok(vec![PdObj::iverson(pd_unique_by(&seq, pd_key)?)])
+        },
+    });
+    let uniquify_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_uniquify_by(&seq, pd_key)?])
+        },
+    });
+    let first_duplicate_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_first_duplicate_by(&seq, pd_key)?])
         },
     });
 
@@ -2725,7 +2783,7 @@ pub fn initialize(env: &mut Environment) {
 
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
-    add_cases("*", cc![times_case]);
+    add_cases("*", cc![times_case, repeat_seq_case, xloop_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
@@ -2751,7 +2809,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases("W", cc![seq_words_case, seq_window_case]);
     add_cases("L", cc![abs_case, hoard_len_case, len_case]);
     add_cases("M", cc![neg_case]);
-    add_cases("U", cc![signum_case]);
+    add_cases("U", cc![signum_case, uniquify_case]);
+    add_cases("=g", cc![first_duplicate_case]);
     add_cases("Œ", cc![min_seq_case]);
     add_cases("Æ", cc![max_seq_case]);
     add_cases("‹", cc![floor_case, hoard_first_case, first_case]);
