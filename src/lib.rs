@@ -231,7 +231,12 @@ impl Environment {
     }
 
     fn short_insert(&mut self, name: &str, obj: impl Into<PdObj>) {
-        self.borrow_variables().insert(name.to_string(), obj.into());
+        let vars = self.borrow_variables();
+        let s = name.to_string();
+        if vars.contains_key(&s) {
+            panic!("dupe key in short_insert: {}", s);
+        }
+        vars.insert(s, obj.into());
     }
 
     fn peek_x_stack(&self, depth: usize) -> Option<&PdObj> {
@@ -575,6 +580,19 @@ pub enum PdSeq {
     Range(BigInt, BigInt),
 }
 
+impl IntoIterator for PdSeq {
+    type Item = PdObj;
+    type IntoIter = PdIntoIter;
+
+    fn into_iter(self) -> PdIntoIter {
+        match self {
+            PdSeq::List(v) => PdIntoIter::List(v, 0),
+            PdSeq::String(s) => PdIntoIter::String(s, 0),
+            PdSeq::Range(a, b) => PdIntoIter::Range(num_iter::range(a, b)),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum PdSeqBuildType { String, NotString }
 
@@ -587,6 +605,16 @@ impl BitAnd for PdSeqBuildType {
             (PdSeqBuildType::String,    PdSeqBuildType::NotString) => PdSeqBuildType::NotString,
             (PdSeqBuildType::NotString, PdSeqBuildType::String) =>    PdSeqBuildType::NotString,
             (PdSeqBuildType::NotString, PdSeqBuildType::NotString) => PdSeqBuildType::NotString,
+        }
+    }
+}
+
+impl PdSeqBuildType {
+    fn all(it: impl Iterator<Item=PdObj>) -> PdSeqBuildType {
+        if it.into_iter().all(|x| match x { PdObj::String(_) => true, _ => false }) {
+            PdSeqBuildType::String
+        } else {
+            PdSeqBuildType::NotString
         }
     }
 }
@@ -624,6 +652,12 @@ impl PdSeqElement {
             PdSeqElement::Int(n) => (PdObj::from(n)),
         }
     }
+}
+
+pub enum PdIntoIter {
+    List(Rc<Vec<PdObj>>, usize),
+    String(Rc<Vec<char>>, usize),
+    Range(num_iter::Range<BigInt>),
 }
 
 pub enum PdIter<'a> {
@@ -833,6 +867,26 @@ impl Iterator for PdIter<'_> {
             PdIter::List(it) => it.next().map(PdObj::clone),
             PdIter::String(cs) => cs.next().map(|x| (PdObj::from(*x))),
             PdIter::Range(rs) => rs.next().map(|x| (PdObj::from(x))),
+        }
+    }
+}
+
+impl Iterator for PdIntoIter {
+    type Item = PdObj;
+
+    fn next(&mut self) -> Option<PdObj> {
+        match self {
+            PdIntoIter::List(v, i) => {
+                let ret = v.get(*i);
+                if ret.is_some() { *i += 1; }
+                ret.map(PdObj::clone)
+            }
+            PdIntoIter::String(v, i) => {
+                let ret = v.get(*i);
+                if ret.is_some() { *i += 1; }
+                ret.map(|c| PdObj::from(*c))
+            }
+            PdIntoIter::Range(rs) => rs.next().map(PdObj::from),
         }
     }
 }
@@ -1189,6 +1243,23 @@ fn pd_zip(env: &mut Environment, func: &Rc<dyn Block>, seq1: &PdSeq, seq2: &PdSe
     ret.map(|()| pd_build_like(bty, acc))
 }
 
+fn pd_reduce(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<PdObj> {
+    let mut acc: Option<PdObj> = None;
+
+    for e in it {
+        let cur = match acc {
+            None => e,
+            Some(a) => {
+                // pop consumes the sandbox result since we don't use it any more
+                sandbox(env, func, vec![a, e])?.pop().ok_or(PdError::EmptyReduceIntermediate)?
+            }
+        };
+        acc = Some(cur);
+    }
+
+    acc.ok_or(PdError::BadList("reduce empty list"))
+}
+
 // TODO: wot, this isn't an xy loop in Paradoc proper?
 fn pd_scan(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<Vec<PdObj>> {
     let mut acc: Option<PdObj> = None;
@@ -1524,6 +1595,12 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(pd_list(res));
                 Ok(())
             }),
+            "r" | "reduce" => obb("map", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "map")?;
+                let res = pd_reduce(env, body, seq.iter())?;
+                env.push(res);
+                Ok(())
+            }),
             "u" | "under" => obb("under", bb, |env, body| {
                 let obj = env.pop_result("under no stack")?;
                 body.run(env)?;
@@ -1636,14 +1713,26 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 Ok(())
             }),
             "w" | "deepmap" => obb("deepmap", bb, |env, body| {
-                let seq = pop_seq_range_for(env, "map")?.to_rc_pd_obj();
+                let seq = pop_seq_range_for(env, "deepmap")?.to_rc_pd_obj();
                 let res = pd_deep_map_block(env, body, seq)?;
                 env.extend(res);
                 Ok(())
             }),
             "ø" | "organize" => obb("organize", bb, |env, body| {
-                let seq = pop_seq_range_for(env, "map")?;
+                let seq = pop_seq_range_for(env, "organize")?;
                 let res = pd_organize_by(&seq, pd_key_projector(env, body))?;
+                env.push(res);
+                Ok(())
+            }),
+            "æ" | "max" => obb("max", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "max")?;
+                let res = pd_max_by(&seq, pd_key_projector(env, body))?;
+                env.push(res);
+                Ok(())
+            }),
+            "œ" | "min" => obb("min", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "min")?;
+                let res = pd_min_by(&seq, pd_key_projector(env, body))?;
                 env.push(res);
                 Ok(())
             }),
@@ -2127,6 +2216,39 @@ fn pd_build_like(ty: PdSeqBuildType, x: Vec<PdObj>) -> PdObj {
     }
 }
 
+fn pd_flatten(a: &PdSeq) -> PdObj {
+    let bty = PdSeqBuildType::all(a.iter());
+    let v = a.iter().flat_map(|x| always_seq_or_singleton(&x)).collect();
+    pd_build_like(bty, v)
+}
+
+fn pd_flatten_all(a: &PdObj) -> PdObj {
+    match just_seq(a) {
+        Some(seq) => {
+            let bty = PdSeqBuildType::all(seq.iter());
+            let v = seq.iter().map(|x| pd_flatten_all(&x)).flat_map(|x| always_seq_or_singleton(&x)).collect();
+            pd_build_like(bty, v)
+        }
+        None => PdObj::clone(a),
+    }
+}
+
+fn pd_transpose(seq: &PdSeq) -> Vec<PdObj> {
+    let mut acc: Vec<Vec<PdObj>> = Vec::new();
+    let bty = PdSeqBuildType::all(seq.iter());
+
+    for row in seq.iter() {
+        for (i, obj) in always_seq_or_singleton(&row).iter().enumerate() {
+            match acc.get_mut(i) {
+                Some(col) => col.push(obj),
+                None => acc.push(vec![obj]),
+            }
+        }
+    }
+
+    acc.into_iter().map(|col| pd_build_like(bty, col)).collect()
+}
+
 fn pd_seq_intersection(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     let bty = a.build_type() & b.build_type();
     let mut counter = key_counter(b)?;
@@ -2227,6 +2349,16 @@ fn pd_sort_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&Pd
     keyed_vec.sort_by(|x, y| x.0.cmp(&y.0));
 
     Ok(pd_build_like(bty, keyed_vec.into_iter().map(|x| x.1).collect()))
+}
+
+fn pd_max_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
+    keyed_vec.into_iter().max_by(|x, y| x.0.cmp(&y.0)).map(|x| x.1).ok_or(PdError::BadList("max of empty"))
+}
+
+fn pd_min_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
+    keyed_vec.into_iter().min_by(|x, y| x.0.cmp(&y.0)).map(|x| x.1).ok_or(PdError::BadList("min of empty"))
 }
 
 // TODO if this stabilizes https://github.com/rust-lang/rust/issues/53485
@@ -2373,42 +2505,8 @@ pub fn initialize(env: &mut Environment) {
     let min_case = nn_n![a, b, PdNum::clone(a.min(b))];
     let max_case = nn_n![a, b, PdNum::clone(a.max(b))];
 
-    let min_seq_case = unary_seq_case(|_, a: &PdSeq| {
-        let mut best: Option<PdObj> = None;
-        // i don't think i can simplify this easily because of the inner return Err
-        for obj in a.iter() {
-            match best {
-                None => { best = Some(obj); }
-                Some(old) => {
-                    best = Some(match obj.partial_cmp(&old) {
-                        Some(Ordering::Less) => obj,
-                        Some(Ordering::Equal) => old,
-                        Some(Ordering::Greater) => old,
-                        None => { return Err(PdError::BadComparison); }
-                    })
-                }
-            }
-        }
-        Ok(vec![best.ok_or(PdError::BadList("Min of empty list"))?])
-    });
-    let max_seq_case = unary_seq_case(|_, a: &PdSeq| {
-        let mut best: Option<PdObj> = None;
-        // i don't think i can simplify this easily because of the inner return Err
-        for obj in a.iter() {
-            match best {
-                None => { best = Some(obj); }
-                Some(old) => {
-                    best = Some(match obj.partial_cmp(&old) {
-                        Some(Ordering::Less) => old,
-                        Some(Ordering::Equal) => obj,
-                        Some(Ordering::Greater) => obj,
-                        None => { return Err(PdError::BadComparison); }
-                    })
-                }
-            }
-        }
-        Ok(vec![best.ok_or(PdError::BadList("Min of empty list"))?])
-    });
+    let min_seq_case = unary_seq_case(|_, seq: &PdSeq| Ok(vec![pd_min_by(seq, pd_key)?]));
+    let max_seq_case = unary_seq_case(|_, seq: &PdSeq| Ok(vec![pd_max_by(seq, pd_key)?]));
 
     let uncons_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_first().ok_or(PdError::BadList("Uncons of empty list"))?;
@@ -2433,6 +2531,14 @@ pub fn initialize(env: &mut Environment) {
     let butlast_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_last().ok_or(PdError::BadList("Butlast of empty list"))?.1]) });
 
     let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
+        let mut arity = 0;
+        for case in cases.iter() {
+            if case.arity() < arity {
+                panic!("cases not sorted: {}", name);
+            }
+            arity = case.arity();
+        }
+
         env.short_insert(name, CasedBuiltIn {
             name: name.to_string(),
             cases,
@@ -2680,6 +2786,43 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let cartesian_product_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: just_seq,
+        func: |_, seq1: &PdSeq, seq2: &PdSeq| {
+            Ok(vec![pd_list(
+                    seq1.iter().map(|e1| pd_list(seq2.iter().map(|e2| pd_list(vec![PdObj::clone(&e1), e2])).collect())).collect())])
+        },
+    });
+    let square_cartesian_product_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq: &PdSeq| {
+            Ok(vec![pd_list(
+                    seq.iter().map(|e1| pd_list(seq.iter().map(|e2| pd_list(vec![PdObj::clone(&e1), e2])).collect())).collect())])
+        },
+    });
+
+    let flatten_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq: &PdSeq| {
+            Ok(vec![pd_flatten(seq)])
+        },
+    });
+    // FIXME
+    let flatten_all_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_any,
+        func: |_, obj| {
+            Ok(vec![pd_flatten_all(obj)])
+        },
+    });
+    let transpose_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq: &PdSeq| {
+            Ok(vec![pd_list(pd_transpose(seq))])
+        },
+    });
+
+
     let intersection_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
@@ -2894,7 +3037,7 @@ pub fn initialize(env: &mut Environment) {
 
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
-    add_cases("*", cc![times_case, repeat_seq_case, xloop_case]);
+    add_cases("*", cc![times_case, repeat_seq_case, cartesian_product_case, xloop_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
@@ -2934,13 +3077,14 @@ pub fn initialize(env: &mut Environment) {
     add_cases("½", cc![frac_12_case]);
     add_cases("¼", cc![frac_14_case]);
     add_cases("¾", cc![frac_34_case]);
-    add_cases("²", cc![square_case]);
+    add_cases("²", cc![square_case, square_cartesian_product_case]);
+    add_cases("™", cc![transpose_case]);
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);
     add_cases("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
     add_cases("Ð", cc![down_one_range_case, map_down_singleton_case]);
-    add_cases("…", cc![to_range_case]);
-    add_cases("¨", cc![til_range_case]);
+    add_cases("…", cc![flatten_all_case, to_range_case]);
+    add_cases("¨", cc![flatten_case, til_range_case]);
     add_cases("To", cc![to_range_case]);
     add_cases("Tl", cc![til_range_case]);
 
@@ -3053,8 +3197,6 @@ pub fn initialize(env: &mut Environment) {
     env.short_insert("∅", 0);
     env.short_insert("α", 1);
     env.short_insert("Ep", 1e-9);
-    env.short_insert("Ua", str_class("A-Z"));
-    env.short_insert("La", str_class("a-z"));
 
     env.short_insert("Da", str_class("0-9"));
     env.short_insert("Ua", str_class("A-Z"));
@@ -3230,7 +3372,6 @@ pub fn initialize(env: &mut Environment) {
         func: |a| a.through_float(|f| 1.0/f.tan()),
         name: "Cot".to_string(),
     });
-    forward_f64!("As", asin);
     forward_f64!("Ef", exp);
     forward_f64!("Ln", ln);
     forward_f64!("Lt", log10);
