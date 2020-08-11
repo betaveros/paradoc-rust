@@ -2315,7 +2315,14 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_seq,
         coerce2: num_to_nn_usize,
         func: |_, seq, size| {
-            Ok(vec![pd_list(slice_util::split_slice(seq.to_new_vec().as_slice(), *size, true).iter().map(|s| pd_list(s.to_vec())).collect())])
+            Ok(vec![pd_list(slice_util::split_slice(seq.to_new_vec().as_slice(), *size, true).iter().map(|s| pd_build_like(seq.build_type(), s.to_vec())).collect())])
+        },
+    });
+    let seq_split_discarding_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_nn_usize,
+        func: |_, seq, size| {
+            Ok(vec![pd_list(slice_util::split_slice(seq.to_new_vec().as_slice(), *size, false).iter().map(|s| pd_build_like(seq.build_type(), s.to_vec())).collect())])
         },
     });
     let str_split_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -2550,7 +2557,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("*", cc![times_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
-    add_cases("÷", cc![intdiv_case]);
+    add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
     add_cases("&", cc![bitand_case, intersection_case, just_if_case]);
     add_cases("|", cc![bitor_case, union_case, just_unless_case]);
     add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);

@@ -1,13 +1,14 @@
 use std::rc::Rc;
 // use num::bigint::BigInt;
 extern crate paradoc;
+use paradoc::PdObj;
 
-fn int(x: i32) -> paradoc::PdObj {
-    paradoc::PdObj::from(x)
+fn int(x: i32) -> PdObj {
+    PdObj::from(x)
 }
 
-fn list(xs: Vec<paradoc::PdObj>) -> paradoc::PdObj {
-    paradoc::PdObj::List(Rc::new(xs))
+fn list(xs: Vec<PdObj>) -> PdObj {
+    PdObj::List(Rc::new(xs))
 }
 
 
@@ -130,4 +131,13 @@ fn is_sorted_by() {
 #[test]
 fn hoard() {
     assert_eq!(paradoc::simple_eval("1 2 Hu 4 5 Hu 4 H="), intvec![5]);
+}
+
+#[test]
+fn split() {
+    assert_eq!(paradoc::simple_eval("[1 2 3]2/"), vec![list(vec![list(intvec![1, 2]), list(intvec![3])])]);
+    assert_eq!(paradoc::simple_eval("[1 2 3 4]2/"), vec![list(vec![list(intvec![1, 2]), list(intvec![3, 4])])]);
+    assert_eq!(paradoc::simple_eval("[1 2 3]2÷"), vec![list(vec![list(intvec![1, 2])])]);
+    assert_eq!(paradoc::simple_eval("[1 2 3 4]2÷"), vec![list(vec![list(intvec![1, 2]), list(intvec![3, 4])])]);
+    assert_eq!(paradoc::simple_eval("\"12345\"2/"), vec![list(vec![PdObj::from("12"), PdObj::from("34"), PdObj::from("5")])]);
 }
