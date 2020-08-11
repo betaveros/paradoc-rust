@@ -88,6 +88,14 @@ impl<K,V> Hoard<K,V> {
             Hoard::Map(a) => a.is_empty(),
         }
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Hoard::Vec(a) => a.len(),
+            Hoard::Deque(a) => a.len(),
+            Hoard::Map(a) => a.len(),
+        }
+    }
 }
 
 impl<K: HoardKey, V> Hoard<K, V> {
@@ -146,6 +154,26 @@ impl<K: HoardKey, V> Hoard<K, V> {
 }
 
 impl<K: Ord, V: Clone> Hoard<K,V> {
+    pub fn first(&self) -> Option<&V> {
+        match self {
+            Hoard::Vec(a) => a.first(),
+            Hoard::Deque(a) => a.front(),
+            Hoard::Map(a) => {
+                a.iter().min_by(|a, b| a.0.cmp(b.0)).map(|x| x.1)
+            }
+        }
+    }
+
+    pub fn last(&self) -> Option<&V> {
+        match self {
+            Hoard::Vec(a) => a.last(),
+            Hoard::Deque(a) => a.back(),
+            Hoard::Map(a) => {
+                a.iter().max_by(|a, b| a.0.cmp(b.0)).map(|x| x.1)
+            }
+        }
+    }
+
     pub fn iter(&self) -> HoardIter<'_, V> {
         match self {
             Hoard::Vec(a) => HoardIter::VecIter(a.iter()),
@@ -160,6 +188,7 @@ impl<K: Ord, V: Clone> Hoard<K,V> {
 }
 
 // TODO: sorting is a little excessive. Might break into iter and unordered_iter
+#[derive(Clone)]
 pub enum HoardIter<'a, V> {
     VecIter(Iter<'a, V>),
     DequeIter(std::collections::vec_deque::Iter<'a, V>),

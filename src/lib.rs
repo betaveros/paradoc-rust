@@ -8,10 +8,12 @@ use std::fmt::Debug;
 use std::mem;
 use num_iter;
 use num::bigint::BigInt;
+use num::Integer;
 use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
 use std::collections::{HashSet, HashMap};
 use std::cell::RefCell;
+use rand;
 
 mod lex;
 mod pdnum;
@@ -20,6 +22,7 @@ mod input;
 mod slice_util;
 mod string_util;
 mod hoard;
+mod char_info;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
@@ -515,6 +518,12 @@ fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
         _ => None,
     }
 }
+fn num_to_bigint(obj: &PdObj) -> Option<BigInt> {
+    match obj {
+        PdObj::Num(n) => n.to_bigint(),
+        _ => None,
+    }
+}
 // TODO these should really PdError when they get a PdNum that fails
 // or maybe clamp or something, if we always use them that way? idk
 fn num_to_isize(obj: &PdObj) -> Option<isize> {
@@ -666,6 +675,15 @@ impl PdSeq {
         }
     }
 
+    // poor man's rank-2 type
+    fn dual_apply<LF, SF>(&self, lf: LF, sf: SF) -> PdSeq where LF: FnOnce(&Vec<PdObj>) -> Vec<PdObj>, SF: FnOnce(&Vec<char>) -> Vec<char> {
+        match self {
+            PdSeq::List(v) => PdSeq::List(Rc::new(lf(v))),
+            PdSeq::String(s) => PdSeq::String(Rc::new(sf(s))),
+            PdSeq::Range(_, _) => PdSeq::List(Rc::new(lf(&self.to_new_vec()))),
+        }
+    }
+
     fn pythonic_split_left(&self, index: isize) -> PdSeq {
         let uindex = self.pythonic_clamp_slice_index(index);
 
@@ -685,12 +703,34 @@ impl PdSeq {
         }
     }
 
-    fn rev_copy(&self) -> PdSeq {
-        match self {
-            PdSeq::List(v)     => PdSeq::List  (Rc::new(slice_util::rev_copy(&**v).iter().cloned().cloned().collect())),
-            PdSeq::String(s)   => PdSeq::String(Rc::new(slice_util::rev_copy(&**s).iter().cloned().cloned().collect())),
-            PdSeq::Range(_, _) => PdSeq::List  (Rc::new(slice_util::rev_copy(&self.to_new_vec()).iter().cloned().cloned().collect())),
+    fn help_rev_copy<T: Clone>(v: &Vec<T>) -> Vec<T> {
+        slice_util::rev_copy(v).iter().cloned().cloned().collect()
+    }
+
+    fn help_cycle_left<'a, T: Clone>(amt: &'a BigInt) -> impl Fn(&Vec<T>) -> Vec<T> + 'a {
+        move |v| {
+            if v.is_empty() {
+                Vec::new()
+            } else {
+                let r = amt.mod_floor(&BigInt::from(v.len())).to_usize().expect("mod usize to usize should work");
+                let (lh, rh) = v.split_at(r);
+                let mut ret = rh.to_vec();
+                ret.extend_from_slice(lh);
+                ret
+            }
         }
+    }
+
+    fn rev_copy(&self) -> PdSeq {
+        self.dual_apply(PdSeq::help_rev_copy, PdSeq::help_rev_copy)
+    }
+
+    fn cycle_left(&self, amt: &BigInt) -> PdSeq {
+        self.dual_apply(PdSeq::help_cycle_left(amt), PdSeq::help_cycle_left(amt))
+    }
+
+    fn cycle_right(&self, amt: &BigInt) -> PdSeq {
+        self.dual_apply(PdSeq::help_cycle_left(&-amt), PdSeq::help_cycle_left(&-amt))
     }
 
     fn pythonic_split_right(&self, index: isize) -> PdSeq {
@@ -1030,6 +1070,28 @@ impl Block for DeepCharToCharBlock {
         String::clone(&self.name) + "_deep_char_to_char"
     }
 }
+
+struct DeepCharToIntOrZeroBlock {
+    func: fn(char) -> i32,
+    name: String,
+}
+impl Debug for DeepCharToIntOrZeroBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "DeepCharToIntOrZeroBlock {{ func: ???, name: {:?} }}", self.name)
+    }
+}
+impl Block for DeepCharToIntOrZeroBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        let a = env.pop_result("deep char to int|0 no stack")?;
+        let res = pd_deep_char_to_int_or_zero(&self.func, &a);
+        env.push(res);
+        Ok(())
+    }
+    fn code_repr(&self) -> String {
+        String::clone(&self.name) + "_deep_char_to_int_or_zero"
+    }
+}
+
 
 fn yx_loop<F>(env: &mut Environment, it: impl Iterator<Item=PdObj>, mut body: F) -> PdUnit where F: FnMut(&mut Environment, usize, PdObj) -> PdUnit {
     env.push_yx();
@@ -1895,6 +1957,14 @@ fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdObj
     }, a)
 }
 
+fn pd_deep_char_to_int_or_zero<F>(f: &F, a: &PdObj) -> PdObj
+    where F: Fn(char) -> i32 {
+
+    pd_deep_map(&|num: &PdNum| {
+        num.to_char().map_or(PdNum::from(0), |ch| PdNum::from(f(ch)))
+    }, a)
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub enum PdKey {
     Num(PdTotalNum),
@@ -2143,6 +2213,42 @@ fn pd_unique_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&P
     Ok(true)
 }
 
+fn pd_mul_div_const(env: &mut Environment, obj: &PdObj, mul: usize, div: usize) -> PdResult<Vec<PdObj>> {
+    match obj {
+        PdObj::Num(n) => {
+            if div == 1 {
+                Ok(vec![PdObj::from(n.mul_const(mul as i32))])
+            } else {
+                Ok(vec![PdObj::from(n.mul_div_const(mul as i32, div as i32))])
+            }
+        }
+        PdObj::List(x) => {
+            let target_len = x.len() * mul / div;
+            Ok(vec![pd_list(x.iter().cycle().take(target_len).cloned().collect())])
+        }
+        PdObj::String(x) => {
+            let target_len = x.len() * mul / div;
+            Ok(vec![PdObj::from(x.iter().cycle().take(target_len).cloned().collect::<Vec<char>>())])
+        }
+        PdObj::Block(b) => {
+            if div == 1 {
+                pd_xloop(env, b, PdSeq::Range(BigInt::from(0), BigInt::from(mul)).iter())?;
+            } else {
+                let threshold = (mul as f64) / (div as f64);
+                if rand::random::<f64>() < threshold {
+                    b.run(env)?;
+                }
+            }
+            Ok(vec![])
+        }
+        PdObj::Hoard(x) => {
+            let h = x.borrow();
+            let target_len = h.len() * mul / div;
+            Ok(vec![pd_list(h.iter().cycle().take(target_len).cloned().collect())])
+        }
+    }
+}
+
 pub fn initialize(env: &mut Environment) {
     let plus_case = nn_n![a, b, a + b];
     let minus_case = nn_n![a, b, a - b];
@@ -2160,6 +2266,10 @@ pub fn initialize(env: &mut Environment) {
     let dec_case   = n_n![a, a.add_const(-1)];
     let inc2_case  = n_n![a, a.add_const( 2)];
     let dec2_case  = n_n![a, a.add_const(-2)];
+    let double_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| pd_mul_div_const(env, a, 2, 1) });
+    let frac_14_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| pd_mul_div_const(env, a, 1, 4) });
+    let frac_12_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| pd_mul_div_const(env, a, 1, 2) });
+    let frac_34_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| pd_mul_div_const(env, a, 3, 4) });
 
     let ceil_case   = n_n![a, a.ceil()];
     let floor_case  = n_n![a, a.floor()];
@@ -2222,6 +2332,14 @@ pub fn initialize(env: &mut Environment) {
         let (x, xs) = a.split_first().ok_or(PdError::BadList("Uncons of empty list"))?;
         Ok(vec![xs, x])
     });
+    let hoard_first_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_hoard,
+        func: |_, hoard| { Ok(vec![PdObj::clone(hoard.borrow().first().ok_or(PdError::BadList("first of empty hoard"))?)]) },
+    });
+    let hoard_last_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_hoard,
+        func: |_, hoard| { Ok(vec![PdObj::clone(hoard.borrow().last().ok_or(PdError::BadList("last of empty hoard"))?)]) },
+    });
     let first_case = unary_seq_range_case(|_, a| { Ok(vec![a.first().ok_or(PdError::BadList("First of empty list"))?.to_rc_pd_obj() ]) });
     let rest_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_first().ok_or(PdError::BadList("Rest of empty list"))?.1]) });
 
@@ -2280,6 +2398,10 @@ pub fn initialize(env: &mut Environment) {
     let find_not_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
         Ok(vec![pd_find_entry(env, block, seq.iter(), FilterType::Reject)?.1])
     });
+    let hoard_len_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_hoard,
+        func: |_, hoard| { Ok(vec![(PdObj::from(hoard.borrow().len()))]) },
+    });
     let len_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| { Ok(vec![(PdObj::from(seq.len()))]) },
@@ -2309,6 +2431,32 @@ pub fn initialize(env: &mut Environment) {
         coerce2: num_to_isize,
         func: |_, seq, index| {
             Ok(vec![seq.pythonic_split_right(*index).to_rc_pd_obj()])
+        },
+    });
+    let cycle_left_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: num_to_bigint,
+        func: |_, seq, num| {
+            Ok(vec![seq.cycle_left(num).to_rc_pd_obj()])
+        },
+    });
+    let cycle_right_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: num_to_bigint,
+        func: |_, seq, num| {
+            Ok(vec![seq.cycle_right(num).to_rc_pd_obj()])
+        },
+    });
+    let cycle_left_one_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: seq_range,
+        func: |_, seq| {
+            Ok(vec![seq.cycle_left(&BigInt::from(1)).to_rc_pd_obj()])
+        },
+    });
+    let cycle_right_one_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: seq_range,
+        func: |_, seq| {
+            Ok(vec![seq.cycle_right(&BigInt::from(1)).to_rc_pd_obj()])
         },
     });
     let seq_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -2589,6 +2737,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases("=", cc![index_hoard_case, eq_case, index_case, find_case]);
     add_cases("<", cc![lt_case, lt_slice_case]);
     add_cases(">", cc![gt_case, ge_slice_case]);
+    add_cases("<c", cc![cycle_left_case]);
+    add_cases(">c", cc![cycle_right_case]);
+    add_cases("<o", cc![cycle_left_one_case]);
+    add_cases(">o", cc![cycle_right_one_case]);
     add_cases("<m", cc![min_case]);
     add_cases(">m", cc![max_case]);
     add_cases("Õ", cc![min_case]);
@@ -2597,15 +2749,19 @@ pub fn initialize(env: &mut Environment) {
     add_cases(">r", cc![max_seq_case]);
     add_cases("D", cc![down_case]);
     add_cases("W", cc![seq_words_case, seq_window_case]);
-    add_cases("L", cc![abs_case, len_case]);
+    add_cases("L", cc![abs_case, hoard_len_case, len_case]);
     add_cases("M", cc![neg_case]);
     add_cases("U", cc![signum_case]);
     add_cases("Œ", cc![min_seq_case]);
     add_cases("Æ", cc![max_seq_case]);
-    add_cases("‹", cc![floor_case, first_case]);
-    add_cases("›", cc![ceil_case, last_case]);
+    add_cases("‹", cc![floor_case, hoard_first_case, first_case]);
+    add_cases("›", cc![ceil_case, hoard_last_case, last_case]);
     add_cases("«", cc![dec2_case, butlast_case]);
     add_cases("»", cc![inc2_case, rest_case]);
+    add_cases("×", cc![double_case]);
+    add_cases("½", cc![frac_12_case]);
+    add_cases("¼", cc![frac_14_case]);
+    add_cases("¾", cc![frac_34_case]);
     add_cases("²", cc![square_case]);
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);
@@ -2925,6 +3081,18 @@ pub fn initialize(env: &mut Environment) {
             }
         },
         name: "swapcase".to_string(),
+    });
+    env.short_insert("Mc", DeepCharToCharBlock {
+        func: |a| *char_info::MATCHING_MAP.get(&a).unwrap_or(&a),
+        name: "matching_char".to_string(),
+    });
+    env.short_insert("Vc", DeepCharToIntOrZeroBlock {
+        func: |a| *char_info::VALUE_MAP.get(&a).unwrap_or(&0),
+        name: "value_char".to_string(),
+    });
+    env.short_insert("Nc", DeepCharToIntOrZeroBlock {
+        func: |a| *char_info::NEST_MAP.get(&a).unwrap_or(&0),
+        name: "nest_char".to_string(),
     });
 }
 

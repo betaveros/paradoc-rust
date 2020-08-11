@@ -133,6 +133,10 @@ impl PdNum {
         }
     }
 
+    pub fn mul_div_const(&self, mul: i32, div: i32) -> PdNum {
+        self.mul_const(mul) / PdNum::from(div)
+    }
+
     pub fn is_nonzero(&self) -> bool {
         match self {
             PdNum::Int(i) => *i != BigInt::from(0),
