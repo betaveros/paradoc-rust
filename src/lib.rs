@@ -2339,6 +2339,29 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_list(slice_util::split_slice_by(seq.to_new_vec().as_slice(), tok.to_new_vec().as_slice()).iter().map(|s| pd_list(s.to_vec())).collect())])
         },
     });
+    let seq_window_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_nn_usize,
+        func: |_, seq, size| {
+            Ok(vec![pd_list(slice_util::sliding_window(seq.to_new_vec().as_slice(), *size).iter().map(|s| pd_build_like(seq.build_type(), s.to_vec())).collect())])
+        },
+    });
+    let seq_words_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(slice_util::split_slice_by_predicate(seq.to_new_vec().as_slice(), |x| {
+                if let PdObj::Num(n) = x {
+                    if let PdNum::Char(_) = **n {
+                        n.to_char().map_or(false, char::is_whitespace)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }, true).iter().map(|s| pd_build_like(seq.build_type(), s.to_vec())).collect())])
+        },
+    });
 
     let cat_list_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: list_singleton,
@@ -2573,6 +2596,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("<r", cc![min_seq_case]);
     add_cases(">r", cc![max_seq_case]);
     add_cases("D", cc![down_case]);
+    add_cases("W", cc![seq_words_case, seq_window_case]);
     add_cases("L", cc![abs_case, len_case]);
     add_cases("M", cc![neg_case]);
     add_cases("U", cc![signum_case]);
