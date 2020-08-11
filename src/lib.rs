@@ -1423,12 +1423,21 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
 
     match obj {
         PdObj::Num(n) => match trailer {
-            "m" | "minus" => { Ok(((PdObj::from(-&**n)), false)) }
-            "h" | "hundred" => { Ok(((PdObj::from(n.mul_const(100))), false)) }
-            "k" | "thousand" => { Ok(((PdObj::from(n.mul_const(1000))), false)) }
+            "m" | "minus" => { Ok((PdObj::from(-&**n), false)) }
+            "h" | "hundred" => { Ok((PdObj::from(n.mul_const(100)), false)) }
+            "k" | "thousand" => { Ok((PdObj::from(n.mul_const(1000)), false)) }
             "p" | "power" => {
                 let exponent: PdNum = PdNum::clone(n);
                 Ok(((PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
+            }
+            // TODO maaaaybe look at the sign
+            "d" | "digits" => match &**n {
+                PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
+                _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+            }
+            "b" | "bits" => match &**n {
+                PdNum::Int(i) => Ok((pd_list(b.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
+                _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
             }
             _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
         }
