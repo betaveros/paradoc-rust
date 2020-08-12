@@ -1891,7 +1891,7 @@ impl Block for CodeBlock {
                     apply_all_trailers(env, PdObj::clone(obj), true, trailer)?
                 }
                 RcLeader::Var(s) => {
-                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(String::clone(s)))?;
+                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(s.to_string() + &trailer.iter().map(|x| x.0.as_str()).collect::<Vec<&str>>().join("")))?;
                     let cobj = PdObj::clone(obj); // borrow checker to drop obj which unborrows env
                     apply_all_trailers(env, cobj, false, rest)?
                 }
