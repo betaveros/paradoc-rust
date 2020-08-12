@@ -1589,6 +1589,12 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(pd_list(res));
                 Ok(())
             }),
+            "g" | "get" => obb("map", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "map")?;
+                let res = pd_find_entry(env, body, seq.iter(), FilterType::Filter)?.1;
+                env.push(res);
+                Ok(())
+            }),
             "j" | "reject" => obb("reject", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "reject")?;
                 let res = pd_filter(env, body, seq.iter(), FilterType::Reject)?;
