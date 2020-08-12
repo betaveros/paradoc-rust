@@ -2553,6 +2553,7 @@ fn pd_mul_div_const(env: &mut Environment, obj: &PdObj, mul: usize, div: usize) 
 pub fn initialize(env: &mut Environment) {
     let plus_case = nn_n![a, b, a + b];
     let minus_case = nn_n![a, b, a - b];
+    let antiminus_case = nn_n![a, b, b - a];
     let times_case = nn_n![a, b, a * b];
     // TODO: signs...
     let div_case = nn_n![a, b, a / b];
@@ -2940,6 +2941,13 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_seq_set_difference(seq1, seq2)?])
         },
     });
+    let anti_set_difference_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1, seq2| {
+            Ok(vec![pd_seq_set_difference(seq2, seq1)?])
+        },
+    });
     let symmetric_difference_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
@@ -3060,6 +3068,22 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let range_len_keep_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_any,
+        func: |_, obj| {
+            // TODO: should we propagate char-ness?
+            let n = match obj {
+                PdObj::Num(num) => num.to_bigint().ok_or(PdError::BadFloat)?,
+                PdObj::List(lst) => BigInt::from(lst.len()),
+                PdObj::String(s) => BigInt::from(s.len()),
+                PdObj::Hoard(h) => BigInt::from(h.borrow().len()),
+                PdObj::Block(_) => Err(PdError::BadArgument("range len keep got block".to_string()))?,
+            };
+            let vs = num_iter::range(BigInt::from(0), n).map(|x| PdObj::from(x)).collect();
+            Ok(vec![PdObj::clone(obj), PdObj::List(Rc::new(vs))])
+        },
+    });
+
     let group_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
@@ -3142,6 +3166,7 @@ pub fn initialize(env: &mut Environment) {
 
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
+    add_cases("¯", cc![antiminus_case, anti_set_difference_case]);
     add_cases("*", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case]);
     add_cases("T", cc![cartesian_product_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
@@ -3191,6 +3216,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("Ð", cc![down_one_range_case, map_down_singleton_case]);
     add_cases("…", cc![flatten_all_case, to_range_case]);
     add_cases("¨", cc![flatten_case, til_range_case]);
+    add_cases("´", cc![range_len_keep_case]);
     add_cases("To", cc![to_range_case]);
     add_cases("Tl", cc![til_range_case]);
 
