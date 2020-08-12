@@ -36,6 +36,12 @@ fn test_list() {
 }
 
 #[test]
+fn parity() {
+    assert_eq!(paradoc::simple_eval("3 Od 4 Od 5 Ô 6 Ô"), intvec![1, 0, 1, 0]);
+    assert_eq!(paradoc::simple_eval("3 Ev 4 Ev 5 Ê 6 Ê"), intvec![0, 1, 0, 1]);
+}
+
+#[test]
 fn bool_not() {
     assert_eq!(paradoc::simple_eval("0! 1!"), intvec![1, 0]);
 }

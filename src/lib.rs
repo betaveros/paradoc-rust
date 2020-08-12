@@ -2585,7 +2585,7 @@ pub fn initialize(env: &mut Environment) {
     let positive_or_zero_case = n_n![a, PdNum::iverson(a >= &PdNum::from(0))];
     let negative_or_zero_case = n_n![a, PdNum::iverson(a <= &PdNum::from(0))];
     let even_case = n_n![a, PdNum::iverson(a % &PdNum::from(2) == PdNum::from(0))];
-    let odd_case  = n_n![a, PdNum::iverson(a % &PdNum::from(1) == PdNum::from(0))];
+    let odd_case  = n_n![a, PdNum::iverson(a % &PdNum::from(2) == PdNum::from(1))];
 
     let eq_case = nn_n![a, b, PdNum::iverson(a == b)];
     let lt_case = nn_n![a, b, PdNum::iverson(a < b)];
@@ -3203,7 +3203,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("Â", cc![positive_case, all_case]);
     add_cases("Ê", cc![even_case, any_case]);
     add_cases("Î", cc![equals_one_case, identical_case]);
-    add_cases("Ô", cc![not_any_case]);
+    add_cases("Ô", cc![odd_case, not_any_case]);
     add_cases("Û", cc![negative_case, unique_case]);
     add_cases("Al", cc![all_case]);
     add_cases("Ay", cc![any_case]);
