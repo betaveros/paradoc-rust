@@ -108,6 +108,19 @@ fn looping() {
 }
 
 #[test]
+fn quantifiers() {
+    assert_eq!(paradoc::simple_eval("[2 4 6]Odê"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]Odê"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[3 5 7]Odê"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[2 4 6]Odâ"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]Odâ"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[3 5 7]Odâ"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[2 4 6]Odô"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]Odô"), intvec![0]);
+    assert_eq!(paradoc::simple_eval("[3 5 7]Odô"), intvec![0]);
+}
+
+#[test]
 fn organize() {
     assert_eq!(paradoc::simple_eval("5{2%}ø"), vec![list(vec![list(intvec![0, 2, 4]), list(intvec![1, 3])])]);
 }

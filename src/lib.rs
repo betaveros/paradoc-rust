@@ -1667,7 +1667,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             "â" | "all" => obb("all", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "all")?;
                 let res = pd_flat_fold_with_short_circuit(env, body, true,
-                    |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
+                    |_, o| { if pd_truthy(&o) { Ok((false, true)) } else { Ok((true, false)) } }, seq.iter())?;
                 env.push(PdObj::iverson(res));
                 Ok(())
             }),
@@ -1681,7 +1681,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             "ô" | "none" => obb("none", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "none")?;
                 let res = pd_flat_fold_with_short_circuit(env, body, true,
-                    |_, o| { if pd_truthy(&o) { Ok((false, true)) } else { Ok((true, false)) } }, seq.iter())?;
+                    |_, o| { if pd_truthy(&o) { Ok((true, false)) } else { Ok((false, true)) } }, seq.iter())?;
                 env.push(PdObj::iverson(res));
                 Ok(())
             }),
