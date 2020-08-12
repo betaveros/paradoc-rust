@@ -1681,6 +1681,12 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(PdObj::iverson(res));
                 Ok(())
             }),
+            "ç" | "count" => obb("count", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "count")?;
+                let res = pd_count_by(env, body, seq.iter(), FilterType::Filter)?;
+                env.push(PdObj::from(res));
+                Ok(())
+            }),
             "v" | "bindmap" | "vectorize" => obb("bindmap", bb, |env, body| {
                 let b = env.pop_result("bindmap nothing to bind")?;
                 let bb: Rc<dyn Block> = Rc::new(BindBlock {
@@ -2787,11 +2793,19 @@ pub fn initialize(env: &mut Environment) {
     });
 
     let cartesian_product_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1: &PdSeq, seq2: &PdSeq| {
+            Ok(vec![pd_list(
+                    seq1.iter().map(|e1| pd_list(seq2.iter().map(|e2| pd_list(vec![PdObj::clone(&e1), e2])).collect())).collect())])
+        },
+    });
+    let flat_cartesian_product_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
         coerce2: just_seq,
         func: |_, seq1: &PdSeq, seq2: &PdSeq| {
             Ok(vec![pd_list(
-                    seq1.iter().map(|e1| pd_list(seq2.iter().map(|e2| pd_list(vec![PdObj::clone(&e1), e2])).collect())).collect())])
+                    seq1.iter().flat_map(|e1| seq2.iter().map(move |e2| pd_list(vec![PdObj::clone(&e1), e2]))).collect())])
         },
     });
     let square_cartesian_product_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -3037,7 +3051,8 @@ pub fn initialize(env: &mut Environment) {
 
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
-    add_cases("*", cc![times_case, repeat_seq_case, cartesian_product_case, xloop_case]);
+    add_cases("*", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case]);
+    add_cases("T", cc![cartesian_product_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
