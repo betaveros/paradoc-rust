@@ -519,13 +519,13 @@ macro_rules! force_bi_binary_match {
     ($a:expr, $b:expr, $method:ident, $intmethod:expr) => {
         match ($a, $b) {
             (PdNum::Int  (a), PdNum::Int  (b)) => PdNum::Int($intmethod(a, b)),
-            (PdNum::Int  (a), PdNum::Float(b)) => PdNum::Int($intmethod(a, force_bi(*b, stringify!($method)))),
+            (PdNum::Int  (a), PdNum::Float(b)) => PdNum::Int($intmethod(a, &force_bi(*b, stringify!($method)))),
             (PdNum::Int  (a), PdNum::Char (b)) => PdNum::Int($intmethod(a, b)),
-            (PdNum::Float(a), PdNum::Int  (b)) => PdNum::Int($intmethod(force_bi(*a, stringify!($method)), b)),
-            (PdNum::Float(a), PdNum::Float(b)) => PdNum::Int($intmethod(force_bi(*a, stringify!($method)), force_bi(*b, stringify!($method)))),
-            (PdNum::Float(a), PdNum::Char (b)) => PdNum::Int($intmethod(force_bi(*a, stringify!($method)), b)),
+            (PdNum::Float(a), PdNum::Int  (b)) => PdNum::Int($intmethod(&force_bi(*a, stringify!($method)), b)),
+            (PdNum::Float(a), PdNum::Float(b)) => PdNum::Int($intmethod(&force_bi(*a, stringify!($method)), &force_bi(*b, stringify!($method)))),
+            (PdNum::Float(a), PdNum::Char (b)) => PdNum::Int($intmethod(&force_bi(*a, stringify!($method)), b)),
             (PdNum::Char (a), PdNum::Int  (b)) => PdNum::Int($intmethod(a, b)),
-            (PdNum::Char (a), PdNum::Float(b)) => PdNum::Int($intmethod(a, force_bi(*b, stringify!($method)))),
+            (PdNum::Char (a), PdNum::Float(b)) => PdNum::Int($intmethod(a, &force_bi(*b, stringify!($method)))),
             (PdNum::Char (a), PdNum::Char (b)) => PdNum::Char($intmethod(a, b)),
         }
     };
@@ -554,3 +554,9 @@ macro_rules! impl_force_bi_binary_method {
 impl_force_bi_binary_method!(BitAnd, bitand, BitAnd::bitand);
 impl_force_bi_binary_method!(BitOr, bitor, BitOr::bitor);
 impl_force_bi_binary_method!(BitXor, bitxor, BitXor::bitxor);
+
+impl PdNum {
+    pub fn gcd(&self, other: &PdNum) -> PdNum {
+        force_bi_binary_match!(self, other, gcd, Integer::gcd)
+    }
+}

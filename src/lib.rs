@@ -2389,6 +2389,40 @@ fn pd_is_sorted_by<F>(seq: &PdSeq, mut proj: F, accept: fn(Ordering) -> bool) ->
 }
 
 // TODO: we don't need to hash here, this could take a PdObj projection, but I'm too lazy
+fn pd_group_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let mut acc: Vec<Vec<PdObj>> = Vec::new();
+    let mut cur: Option<(PdKey, Vec<PdObj>)> = None;
+    let bty = seq.build_type();
+
+    for e in seq.iter() {
+        let key = proj(&e)?;
+        match &mut cur {
+            Some((cur_key, cur_group)) => {
+                if cur_key == &key {
+                    cur_group.push(e);
+                } else {
+                    *cur_key = key;
+                    acc.push(mem::replace(cur_group, vec![e]));
+                }
+            }
+            None => {
+                cur = Some((key, vec![e]));
+            }
+        }
+    }
+
+    match cur {
+        Some((_, cur_group)) => {
+            acc.push(cur_group);
+        }
+        None => {}
+    }
+
+    // groups.remove() gives us ownership
+    Ok(pd_list(acc.into_iter().map(|group| pd_build_like(bty, group)).collect()))
+}
+
+// TODO: we don't need to hash here, this could take a PdObj projection, but I'm too lazy
 fn pd_identical_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
     let mut acc: Option<PdKey> = None;
     for obj in seq.iter() {
@@ -2487,6 +2521,7 @@ pub fn initialize(env: &mut Environment) {
     let bitand_case = nn_n![a, b, a & b];
     let bitor_case  = nn_n![a, b, a | b];
     let bitxor_case = nn_n![a, b, a ^ b];
+    let gcd_case    = nn_n![a, b, a.gcd(b)];
 
     let inc_case   = n_n![a, a.add_const( 1)];
     let dec_case   = n_n![a, a.add_const(-1)];
@@ -2984,6 +3019,15 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let group_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_group_by(seq, pd_key)?])
+        },
+    });
+    let group_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_group_by(seq, pd_key_projector(env, block))?])
+    });
     // FIXME
     let organize_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
@@ -3109,6 +3153,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("To", cc![to_range_case]);
     add_cases("Tl", cc![til_range_case]);
 
+    add_cases("G", cc![group_case, gcd_case, group_by_case]);
     add_cases("Ø", cc![organize_case, organize_by_case]);
     add_cases("$", cc![sort_case, sort_by_case]);
     add_cases("$p", cc![is_sorted_case, is_sorted_by_case]);
