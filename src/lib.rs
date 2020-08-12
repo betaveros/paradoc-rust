@@ -29,6 +29,7 @@ use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
 use crate::string_util::{str_class, int_groups, float_groups};
 use crate::hoard::{Hoard, HoardKey};
+use crate::lex::AssignType;
 
 #[derive(Debug)]
 pub struct TopEnvironment {
@@ -230,11 +231,16 @@ impl Environment {
         self.pop_x();
     }
 
-    fn short_insert(&mut self, name: &str, obj: impl Into<PdObj>) {
+    fn insert(&mut self, name: String, obj: impl Into<PdObj>) {
+        let vars = self.borrow_variables();
+        vars.insert(name, obj.into());
+    }
+
+    fn insert_builtin(&mut self, name: &str, obj: impl Into<PdObj>) {
         let vars = self.borrow_variables();
         let s = name.to_string();
         if vars.contains_key(&s) {
-            panic!("dupe key in short_insert: {}", s);
+            panic!("dupe key in insert_builtin: {}", s);
         }
         vars.insert(s, obj.into());
     }
@@ -1451,6 +1457,7 @@ impl Block for HoardBlock {
 pub enum RcLeader {
     Lit(PdObj),
     Var(Rc<String>),
+    Assign(AssignType),
 }
 
 #[derive(Debug)]
@@ -1502,6 +1509,9 @@ fn rcify(tokens: Vec<lex::Token>) -> Vec<RcToken> {
             }
             lex::Leader::Var(s) => {
                 RcLeader::Var(Rc::new(s))
+            }
+            lex::Leader::Assign(aty) => {
+                RcLeader::Assign(aty)
             }
         };
         RcToken(rcleader, trailer)
@@ -1890,23 +1900,54 @@ impl Block for CodeBlock {
             }
         }
 
+        let mut active_assign = None;
         for RcToken(leader, trailer) in &self.1 {
             // println!("{:?} {:?}", leader, trailer);
-            let (obj, reluctant) = match leader {
-                RcLeader::Lit(obj) => {
-                    apply_all_trailers(env, PdObj::clone(obj), true, trailer)?
+            match active_assign {
+                Some(aty) => {
+                    if let RcLeader::Var(s) = leader {
+                        let mut var_name = s.to_string();
+                        for t in trailer {
+                            var_name.push_str(t.0.as_str());
+                        }
+                        let obj = match aty {
+                            AssignType::Peek => env.peek_result("assign")?,
+                            AssignType::Pop => env.pop_result("assign")?,
+                        };
+                        env.insert(var_name, obj);
+                    } else {
+                        panic!("can't assign to non-var :(");
+                    }
+                    active_assign = None;
                 }
-                RcLeader::Var(s) => {
-                    let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(s.to_string() + &trailer.iter().map(|x| x.0.as_str()).collect::<Vec<&str>>().join("")))?;
-                    let cobj = PdObj::clone(obj); // borrow checker to drop obj which unborrows env
-                    apply_all_trailers(env, cobj, false, rest)?
-                }
-            };
+                None => match leader {
+                    RcLeader::Lit(obj) => {
+                        let (obj, reluctant) = apply_all_trailers(env, PdObj::clone(obj), true, trailer)?;
 
-            if reluctant {
-                env.push(obj);
-            } else {
-                apply_on(&mut env, obj)?;
+                        if reluctant {
+                            env.push(obj);
+                        } else {
+                            apply_on(&mut env, obj)?;
+                        }
+                    }
+                    RcLeader::Var(s) => {
+                        let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(s.to_string() + &trailer.iter().map(|x| x.0.as_str()).collect::<Vec<&str>>().join("")))?;
+                        let cobj = PdObj::clone(obj); // borrow checker to drop obj which unborrows env
+                        let (obj, reluctant) = apply_all_trailers(env, cobj, false, rest)?;
+
+                        if reluctant {
+                            env.push(obj);
+                        } else {
+                            apply_on(&mut env, obj)?;
+                        }
+                    }
+                    RcLeader::Assign(aty) => {
+                        if active_assign.is_some() {
+                            panic!("what???");
+                        }
+                        active_assign = Some(*aty);
+                    }
+                }
             }
         }
         Ok(())
@@ -2586,7 +2627,7 @@ pub fn initialize(env: &mut Environment) {
             arity = case.arity();
         }
 
-        env.short_insert(name, CasedBuiltIn {
+        env.insert_builtin(name, CasedBuiltIn {
             name: name.to_string(),
             cases,
         });
@@ -3254,59 +3295,60 @@ pub fn initialize(env: &mut Environment) {
     });
     add_cases("°", cc![replicate_case]);
 
-    env.short_insert("H", Hoard::new());
+    env.insert_builtin("H", Hoard::new());
+    env.insert_builtin("•", Hoard::new());
 
     // env.variables.insert("X".to_string(), (PdObj::Int(3.to_bigint().unwrap())));
-    env.short_insert("N", '\n');
-    env.short_insert("A", 10);
-    env.short_insert("¹", 11);
-    env.short_insert("∅", 0);
-    env.short_insert("α", 1);
-    env.short_insert("Ep", 1e-9);
+    env.insert_builtin("N", '\n');
+    env.insert_builtin("A", 10);
+    env.insert_builtin("¹", 11);
+    env.insert_builtin("∅", 0);
+    env.insert_builtin("α", 1);
+    env.insert_builtin("Ep", 1e-9);
 
-    env.short_insert("Da", str_class("0-9"));
-    env.short_insert("Ua", str_class("A-Z"));
-    env.short_insert("La", str_class("a-z"));
-    env.short_insert("Aa", str_class("A-Za-z"));
+    env.insert_builtin("Da", str_class("0-9"));
+    env.insert_builtin("Ua", str_class("A-Z"));
+    env.insert_builtin("La", str_class("a-z"));
+    env.insert_builtin("Aa", str_class("A-Za-z"));
 
     // # Non-breaking space (U+00A0)
-    env.short_insert("\u{a0}", ' ');
-    env.short_insert("␣", ' ');
+    env.insert_builtin("\u{a0}", ' ');
+    env.insert_builtin("␣", ' ');
 
-    env.short_insert("Å", str_class("A-Z"));
-    env.short_insert("Åa", str_class("a-zA-Z"));
-    // env.short_insert("Åb", case_double("BCDFGHJKLMNPQRSTVWXZ"));
-    // env.short_insert("Åc", case_double("BCDFGHJKLMNPQRSTVWXYZ"));
-    env.short_insert("Åd", str_class("9-0"));
-    env.short_insert("Åf", str_class("A-Za-z0-9+/"));
-    env.short_insert("Åh", str_class("0-9A-F"));
-    env.short_insert("Åi", str_class("A-Za-z0-9_"));
-    env.short_insert("Åj", str_class("a-zA-Z0-9_"));
-    env.short_insert("Ål", str_class("z-a"));
-    env.short_insert("Åm", "()<>[]{}");
-    env.short_insert("Åp", str_class(" -~"));
-    // env.short_insert("Åq", case_double("QWERTYUIOP"));
-    // env.short_insert("Ås", case_double("ASDFGHJKL"));
-    env.short_insert("Åt", str_class("0-9A-Z"));
-    env.short_insert("Åu", str_class("Z-A"));
-    // env.short_insert("Åv", case_double("AEIOU"));
-    // env.short_insert("Åx", case_double("ZXCVBNM"));
-    // env.short_insert("Åy", case_double("AEIOUY"));
-    env.short_insert("Åz", str_class("z-aZ-A"));
+    env.insert_builtin("Å", str_class("A-Z"));
+    env.insert_builtin("Åa", str_class("a-zA-Z"));
+    // env.insert_builtin("Åb", case_double("BCDFGHJKLMNPQRSTVWXZ"));
+    // env.insert_builtin("Åc", case_double("BCDFGHJKLMNPQRSTVWXYZ"));
+    env.insert_builtin("Åd", str_class("9-0"));
+    env.insert_builtin("Åf", str_class("A-Za-z0-9+/"));
+    env.insert_builtin("Åh", str_class("0-9A-F"));
+    env.insert_builtin("Åi", str_class("A-Za-z0-9_"));
+    env.insert_builtin("Åj", str_class("a-zA-Z0-9_"));
+    env.insert_builtin("Ål", str_class("z-a"));
+    env.insert_builtin("Åm", "()<>[]{}");
+    env.insert_builtin("Åp", str_class(" -~"));
+    // env.insert_builtin("Åq", case_double("QWERTYUIOP"));
+    // env.insert_builtin("Ås", case_double("ASDFGHJKL"));
+    env.insert_builtin("Åt", str_class("0-9A-Z"));
+    env.insert_builtin("Åu", str_class("Z-A"));
+    // env.insert_builtin("Åv", case_double("AEIOU"));
+    // env.insert_builtin("Åx", case_double("ZXCVBNM"));
+    // env.insert_builtin("Åy", case_double("AEIOUY"));
+    env.insert_builtin("Åz", str_class("z-aZ-A"));
 
-    env.short_insert(" ", BuiltIn {
+    env.insert_builtin(" ", BuiltIn {
         name: "Nop".to_string(),
         func: |_env| Ok(()),
     });
-    env.short_insert("\n", BuiltIn {
+    env.insert_builtin("\n", BuiltIn {
         name: "Nop".to_string(),
         func: |_env| Ok(()),
     });
-    env.short_insert("[", BuiltIn {
+    env.insert_builtin("[", BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); Ok(()) },
     });
-    env.short_insert("]", BuiltIn {
+    env.insert_builtin("]", BuiltIn {
         name: "Pack".to_string(),
         func: |env| {
             let list = env.pop_until_stack_marker();
@@ -3314,7 +3356,7 @@ pub fn initialize(env: &mut Environment) {
             Ok(())
         },
     });
-    env.short_insert("¬", BuiltIn {
+    env.insert_builtin("¬", BuiltIn {
         name: "Pack_reverse".to_string(),
         func: |env| {
             let mut list = env.pop_until_stack_marker();
@@ -3323,7 +3365,7 @@ pub fn initialize(env: &mut Environment) {
             Ok(())
         },
     });
-    env.short_insert("~", BuiltIn {
+    env.insert_builtin("~", BuiltIn {
         name: "Expand_or_eval".to_string(),
         func: |env| {
             match env.pop_result("~ failed")? {
@@ -3333,7 +3375,7 @@ pub fn initialize(env: &mut Environment) {
             }
         },
     });
-    env.short_insert("O", BuiltIn {
+    env.insert_builtin("O", BuiltIn {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_result("O failed")?;
@@ -3341,7 +3383,7 @@ pub fn initialize(env: &mut Environment) {
             Ok(())
         },
     });
-    env.short_insert("P", BuiltIn {
+    env.insert_builtin("P", BuiltIn {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_result("P failed")?;
@@ -3349,15 +3391,15 @@ pub fn initialize(env: &mut Environment) {
             Ok(())
         },
     });
-    env.short_insert("Q", BuiltIn {
+    env.insert_builtin("Q", BuiltIn {
         name: "Break".to_string(),
         func: |_| Err(PdError::Break),
     });
-    env.short_insert("K", BuiltIn {
+    env.insert_builtin("K", BuiltIn {
         name: "Continue".to_string(),
         func: |_| Err(PdError::Continue),
     });
-    env.short_insert("?", BuiltIn {
+    env.insert_builtin("?", BuiltIn {
         name: "If_else".to_string(),
         func: |env| {
             let else_branch = env.pop_result("If_else else failed")?;
@@ -3370,51 +3412,51 @@ pub fn initialize(env: &mut Environment) {
             }
         },
     });
-    env.short_insert("Á", DeepZipBlock {
+    env.insert_builtin("Á", DeepZipBlock {
         func: |a, b| a + b,
         name: "plus".to_string(),
     });
-    env.short_insert("À", DeepZipBlock {
+    env.insert_builtin("À", DeepZipBlock {
         func: |a, b| a - b,
         name: "minus".to_string(),
     });
-    env.short_insert("È", DeepNumToNumBlock {
+    env.insert_builtin("È", DeepNumToNumBlock {
         func: |a| a * a,
         name: "square".to_string(),
     });
-    env.short_insert("É", DeepNumToNumBlock {
+    env.insert_builtin("É", DeepNumToNumBlock {
         func: |a| PdNum::from(2).pow_num(a),
         name: "pow2".to_string(),
     });
-    env.short_insert("Ì", DeepNumToNumBlock {
+    env.insert_builtin("Ì", DeepNumToNumBlock {
         func: |a| -a,
         name: "negate".to_string(),
     });
-    env.short_insert("Í", DeepNumToNumBlock {
+    env.insert_builtin("Í", DeepNumToNumBlock {
         func: |a| &PdNum::from(1)/a,
         name: "invert".to_string(),
     });
-    env.short_insert("Ò", DeepZipBlock {
+    env.insert_builtin("Ò", DeepZipBlock {
         func: |a, b| a * b,
         name: "times".to_string(),
     });
-    env.short_insert("Ó", DeepZipBlock {
+    env.insert_builtin("Ó", DeepZipBlock {
         func: |a, b| a / b,
         name: "divide".to_string(),
     });
-    env.short_insert("Ú", DeepZipBlock {
+    env.insert_builtin("Ú", DeepZipBlock {
         func: |a, b| a % b,
         name: "mod".to_string(),
     });
 
-    env.short_insert("±", DeepZipBlock {
+    env.insert_builtin("±", DeepZipBlock {
         func: |a, b| (a - b).abs(),
         name: "absdiff".to_string(),
     });
 
     macro_rules! forward_f64 {
         ($name:expr, $fname:ident) => {
-            env.short_insert($name, DeepNumToNumBlock {
+            env.insert_builtin($name, DeepNumToNumBlock {
                 func: |a| a.through_float(f64::$fname),
                 name: stringify!($fname).to_string(),
             });
@@ -3426,15 +3468,15 @@ pub fn initialize(env: &mut Environment) {
     forward_f64!("As", asin);
     forward_f64!("Ac", acos);
     forward_f64!("At", atan);
-    env.short_insert("Sc", DeepNumToNumBlock {
+    env.insert_builtin("Sc", DeepNumToNumBlock {
         func: |a| a.through_float(|f| 1.0/f.cos()),
         name: "Sec".to_string(),
     });
-    env.short_insert("Cc", DeepNumToNumBlock {
+    env.insert_builtin("Cc", DeepNumToNumBlock {
         func: |a| a.through_float(|f| 1.0/f.sin()),
         name: "Csc".to_string(),
     });
-    env.short_insert("Ct", DeepNumToNumBlock {
+    env.insert_builtin("Ct", DeepNumToNumBlock {
         func: |a| a.through_float(|f| 1.0/f.tan()),
         name: "Cot".to_string(),
     });
@@ -3443,15 +3485,15 @@ pub fn initialize(env: &mut Environment) {
     forward_f64!("Lt", log10);
     forward_f64!("Lg", log2);
 
-    env.short_insert("Uc", DeepCharToCharBlock {
+    env.insert_builtin("Uc", DeepCharToCharBlock {
         func: |a| a.to_uppercase().next().expect("uppercase :("), // FIXME uppercasing chars can produce more than one!
         name: "uppercase".to_string(),
     });
-    env.short_insert("Lc", DeepCharToCharBlock {
+    env.insert_builtin("Lc", DeepCharToCharBlock {
         func: |a| a.to_lowercase().next().expect("lowercase :("), // FIXME
         name: "lowercase".to_string(),
     });
-    env.short_insert("Xc", DeepCharToCharBlock {
+    env.insert_builtin("Xc", DeepCharToCharBlock {
         func: |a| {
             if a.is_lowercase() {
                 a.to_uppercase().next().expect("swap to uppercase :(")
@@ -3461,17 +3503,34 @@ pub fn initialize(env: &mut Environment) {
         },
         name: "swapcase".to_string(),
     });
-    env.short_insert("Mc", DeepCharToCharBlock {
+    env.insert_builtin("Mc", DeepCharToCharBlock {
         func: |a| *char_info::MATCHING_MAP.get(&a).unwrap_or(&a),
         name: "matching_char".to_string(),
     });
-    env.short_insert("Vc", DeepCharToIntOrZeroBlock {
+    env.insert_builtin("Vc", DeepCharToIntOrZeroBlock {
         func: |a| *char_info::VALUE_MAP.get(&a).unwrap_or(&0),
         name: "value_char".to_string(),
     });
-    env.short_insert("Nc", DeepCharToIntOrZeroBlock {
+    env.insert_builtin("Nc", DeepCharToIntOrZeroBlock {
         func: |a| *char_info::NEST_MAP.get(&a).unwrap_or(&0),
         name: "nest_char".to_string(),
+    });
+
+    env.insert_builtin("·", BuiltIn {
+        name: "Assign_bullet".to_string(),
+        func: |env| {
+            let obj = env.peek_result("Assign_bullet failed")?;
+            env.insert("•".to_string(), obj);
+            Ok(())
+        },
+    });
+    env.insert_builtin("–", BuiltIn {
+        name: "Assign_bullet_destructive".to_string(),
+        func: |env| {
+            let obj = env.pop_result("Assign_bullet_destructive failed")?;
+            env.insert("•".to_string(), obj);
+            Ok(())
+        },
     });
 }
 

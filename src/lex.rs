@@ -35,6 +35,12 @@ fn char_to_block_type(c: char) -> Option<BlockType> {
     })
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum AssignType {
+    Peek,
+    Pop,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Leader {
     StringLit(String),
@@ -43,6 +49,7 @@ pub enum Leader {
     FloatLit(f64),
     Block(BlockType, Vec<Trailer>, Vec<Token>),
     Var(String),
+    Assign(AssignType),
 }
 
 #[derive(Debug, PartialEq)]
@@ -54,7 +61,9 @@ pub fn lex(code: &str) -> (&str, Vec<(&str, &str)>) {
         static ref PD_INIT_TRAILER_PATTERN: Regex = Regex::new(r#"^[a-z_]*"#).unwrap();
 
         // group 1, group 2
-        static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_šþâêîôûøæœç])([a-z_šþâêîôûøæœç]*)"#).unwrap();
+        static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|—?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e[0-9]+)?|—?\.[0-9]+(?:e[0-9]+)?|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_šþâêîôûøæœç])([a-z_šþâêîôûøæœç]*)"#).unwrap();
+
+        static ref PD_NUMERIC_LITERAL_TOKEN_PATTERN: Regex = Regex::new(r#"^—?[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|—?\.[0-9]+(?:e[0-9]+)?$"#).unwrap();
     }
 
     let init_trailer_match = PD_INIT_TRAILER_PATTERN.find(code).expect("kleene star can't fail...");
@@ -154,6 +163,17 @@ pub fn parse_trailer(s: &str) -> Vec<Trailer> {
     trailers
 }
 
+pub fn opt_parse_numeric(token: &str) -> Option<Leader> {
+    let s = token.replace("—", "-");
+    match s.parse::<BigInt>() {
+        Ok(x) => Some(Leader::IntLit(x)),
+        _ => match s.parse::<f64>() {
+            Ok(x) => Some(Leader::FloatLit(x)),
+            _ => None,
+        }
+    }
+}
+
 pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize) {
     let mut ret = Vec::new();
     let mut cur = start;
@@ -174,24 +194,21 @@ pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize)
                 trailer = tokens[ni].1;
                 (Leader::Block(bty, start_trailers, inner), ni + 1)
             } else {
-                match next_char {
-                    '"' => (
-                        Leader::StringLit(parse_string_leader(leader)),
-                        cur + 1
-                    ),
-                    '\'' => (
-                        Leader::CharLit(leader.chars().nth(1).unwrap()),
-                        cur + 1
-                    ),
-                    '}' => break,
-                    _ => match leader.parse::<BigInt>() {
-                        Ok(x) => { (Leader::IntLit(x), cur + 1) }
-                        _ => {
-                            match leader.parse::<f64>() {
-                                Ok(x) => { (Leader::FloatLit(x), cur + 1) }
-                                _ => (Leader::Var(leader.to_string()), cur + 1)
-                            }
-                        }
+                match opt_parse_numeric(leader) {
+                    Some(v) => (v, cur + 1),
+                    None => match next_char {
+                        '"' => (
+                            Leader::StringLit(parse_string_leader(leader)),
+                            cur + 1
+                        ),
+                        '\'' => (
+                            Leader::CharLit(leader.chars().nth(1).unwrap()),
+                            cur + 1
+                        ),
+                        '.' => (Leader::Assign(AssignType::Peek), cur + 1),
+                        '—' => (Leader::Assign(AssignType::Pop), cur + 1),
+                        '}' => break,
+                        _ => (Leader::Var(leader.to_string()), cur + 1),
                     }
                 }
             }
