@@ -58,6 +58,12 @@ fn block() {
 }
 
 #[test]
+fn short_block() {
+    assert_eq!(paradoc::simple_eval("[3 4]βm))"), vec![list(intvec![5, 6])]);
+    assert_eq!(paradoc::simple_eval("[3 4]γm)))"), vec![list(intvec![6, 7])]);
+}
+
+#[test]
 fn each() {
     assert_eq!(paradoc::simple_eval("[3 4]{:}e"), intvec![3, 3, 4, 4]);
     assert_eq!(paradoc::simple_eval("[3 4]:e"), intvec![3, 3, 4, 4]);

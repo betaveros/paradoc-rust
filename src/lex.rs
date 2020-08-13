@@ -35,6 +35,14 @@ fn char_to_block_type(c: char) -> Option<BlockType> {
     })
 }
 
+fn char_to_short_block_size(c: char) -> Option<usize> {
+    Some(match c {
+        'β' => 2usize,
+        'γ' => 3usize,
+        _ => return None,
+    })
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum AssignType {
     Peek,
@@ -174,46 +182,62 @@ pub fn opt_parse_numeric(token: &str) -> Option<Leader> {
     }
 }
 
-pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize) {
-    let mut ret = Vec::new();
-    let mut cur = start;
-    while cur < tokens.len() {
-        // TODO: trailers
-        let (leader, trailer0) = tokens[cur];
-        let mut trailer = trailer0;
+fn parse_one_at(tokens: &Vec<(&str, &str)>, start: usize) -> Option<(Token, usize)> {
+    if let Some((leader, trailer0)) = tokens.get(start) {
+        let mut trailer: &str = *trailer0;
         let next_char_opt = leader.chars().next(); // first utf-8 char
         let next_char = match next_char_opt {
             Some(c) => c,
-            None => break,
+            None => return None,
         };
         let (ld, next) = {
             if let Some(bty) = char_to_block_type(next_char) {
-                let (inner, ni) = parse_at(tokens, cur + 1);
+                let (inner, ni) = parse_at(tokens, start + 1);
                 assert_eq!(tokens[ni].0, "}", "inner parse should stop at close brace");
                 let start_trailers = parse_trailer(trailer);
                 trailer = tokens[ni].1;
                 (Leader::Block(bty, start_trailers, inner), ni + 1)
+            } else if let Some(short_size) = char_to_short_block_size(next_char) {
+                let mut inner = Vec::new();
+                let mut cur = start + 1;
+                for _ in 0..short_size {
+                    let (tok, next) = parse_one_at(tokens, cur).expect("short block parse failed");
+                    inner.push(tok);
+                    cur = next;
+                }
+                // Keep the trailer the same.
+                (Leader::Block(BlockType::Normal, Vec::new(), inner), cur)
             } else {
                 match opt_parse_numeric(leader) {
-                    Some(v) => (v, cur + 1),
+                    Some(v) => (v, start + 1),
                     None => match next_char {
                         '"' => (
                             Leader::StringLit(parse_string_leader(leader)),
-                            cur + 1
+                            start + 1
                         ),
                         '\'' => (
                             Leader::CharLit(leader.chars().nth(1).unwrap()),
-                            cur + 1
+                            start + 1
                         ),
-                        '.' => (Leader::Assign(AssignType::Peek), cur + 1),
-                        '—' => (Leader::Assign(AssignType::Pop), cur + 1),
-                        '}' => break,
-                        _ => (Leader::Var(leader.to_string()), cur + 1),
+                        '.' => (Leader::Assign(AssignType::Peek), start + 1),
+                        '—' => (Leader::Assign(AssignType::Pop), start + 1),
+                        '}' => return None,
+                        _ => (Leader::Var(leader.to_string()), start + 1),
                     }
                 }
             }
         };
-        ret.push(Token(ld, parse_trailer(trailer)));
+        Some((Token(ld, parse_trailer(trailer)), next))
+    } else {
+        None
+    }
+}
+
+pub fn parse_at(tokens: &Vec<(&str, &str)>, start: usize) -> (Vec<Token>, usize) {
+    let mut ret = Vec::new();
+    let mut cur = start;
+    while let Some((tok, next)) = parse_one_at(tokens, cur) {
+        ret.push(tok);
         cur = next
     }
     (ret, cur)
