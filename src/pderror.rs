@@ -9,6 +9,7 @@ pub enum PdError {
     UnhashableBlock(String),
     IndexError(String),
     EmptyResult(String),
+    InputError,
     BadComparison,
     BadParse,
     BadFloat,

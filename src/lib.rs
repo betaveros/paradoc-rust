@@ -3417,6 +3417,14 @@ pub fn initialize(env: &mut Environment) {
             Ok(())
         },
     });
+    env.insert_builtin("V", BuiltIn {
+        name: "Input".to_string(),
+        func: |env| {
+            let obj = env.run_stack_trigger().ok_or(PdError::InputError)?;
+            env.push(obj);
+            Ok(())
+        },
+    });
     env.insert_builtin("Q", BuiltIn {
         name: "Break".to_string(),
         func: |_| Err(PdError::Break),
