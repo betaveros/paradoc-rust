@@ -1,6 +1,7 @@
 use std::collections::{VecDeque, HashMap};
 use std::slice::Iter;
 use std::hash::Hash;
+use std::fmt;
 use crate::pderror::{PdError, PdResult, PdUnit};
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,37 @@ pub trait HoardKey: Hash + Eq {
         } else {
             i += len as isize;
             if 0 <= i { Some(i as usize) } else { None }
+        }
+    }
+}
+
+impl<K: fmt::Display, V: fmt::Display> fmt::Display for Hoard<K, V> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Hoard::Vec(a) => {
+                write!(formatter, "Hoard[Vec:")?;
+                for x in a {
+                    write!(formatter, " {}", x)?;
+                }
+                write!(formatter, "]")
+            }
+            Hoard::Deque(a) => {
+                write!(formatter, "Hoard[Deque:")?;
+                for x in a {
+                    write!(formatter, " {}", x)?;
+                }
+                write!(formatter, "]")
+            }
+            Hoard::Map(a) => {
+                write!(formatter, "Hoard[Map: ")?;
+                let mut started = false;
+                for (k, v) in a {
+                    if started { write!(formatter, ", ")?; }
+                    started = true;
+                    write!(formatter, "{} => {}", k, v)?;
+                }
+                write!(formatter, "]")
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ use std::ops::AddAssign;
 use std::iter::{Sum, Product};
 use std::hash::{Hash, Hasher};
 use std::mem;
+use std::fmt;
 use num::Integer;
 use num::bigint::BigInt;
 use num::bigint::ToBigInt;
@@ -17,6 +18,20 @@ pub enum PdNum {
     Int(BigInt),
     Float(f64),
     Char(BigInt),
+}
+
+impl fmt::Display for PdNum {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PdNum::Int(n) => write!(formatter, "{}", n),
+            PdNum::Float(f) => write!(formatter, "{}f", f),
+            // TODO as above
+            PdNum::Char(c)  => match c.to_u32().and_then(std::char::from_u32) {
+                Some(ch) => write!(formatter, "'{}", ch),
+                None => write!(formatter, "Char({})", c),
+            }
+        }
+    }
 }
 
 impl From<BigInt> for PdNum {
@@ -339,6 +354,13 @@ impl PdNum {
 // Tries to follow the laws
 #[derive(Debug, Clone)]
 pub struct PdTotalNum(pub Rc<PdNum>);
+
+impl fmt::Display for PdTotalNum {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "{}t", self.0)
+    }
+}
+
 
 impl Deref for PdTotalNum {
     type Target = Rc<PdNum>;

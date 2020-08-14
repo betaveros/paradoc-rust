@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::slice::Iter;
 use std::fmt::Debug;
 use std::mem;
+use std::fmt;
 use num_iter;
 use num::bigint::BigInt;
 use num::Integer;
@@ -375,6 +376,32 @@ pub enum PdObj {
     List(Rc<Vec<PdObj>>),
     Block(Rc<dyn Block>),
     Hoard(Rc<RefCell<Hoard<PdKey, PdObj>>>),
+}
+
+impl fmt::Display for PdObj {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PdObj::Num(n) => write!(formatter, "{}", n),
+            PdObj::String(s) => {
+                // FIXME
+                write!(formatter, "\"")?;
+                for c in s.iter() { write!(formatter, "{}", c)?; }
+                write!(formatter, "\"")
+            }
+            PdObj::List(xs) => {
+                write!(formatter, "[")?;
+                let mut started = false;
+                for x in xs.iter() {
+                    if started { write!(formatter, " ")?; }
+                    started = true;
+                    write!(formatter, "{}", x)?;
+                }
+                write!(formatter, "]")
+            }
+            PdObj::Block(b) => write!(formatter, "{:?}", b),
+            PdObj::Hoard(h) => write!(formatter, "{}", h.borrow()),
+        }
+    }
 }
 
 type PdHoard = Hoard<PdKey, PdObj>;
@@ -1571,13 +1598,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             // TODO maaaaybe look at the sign
             "d" | "digits" => match &**n {
                 PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
-                _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+                _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
             }
             "b" | "bits" => match &**n {
                 PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
-                _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+                _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
             }
-            _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+            _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
         }
         PdObj::Block(bb) => match trailer {
             "" => Ok((PdObj::clone(obj), true)),
@@ -1778,7 +1805,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 Ok(())
             }),
 
-            _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+            _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
         }
         PdObj::Hoard(hh) => match trailer {
             "a" | "append" => hb("append", hh, |env, hoard| {
@@ -1839,6 +1866,22 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 hoard.borrow_mut().update(key, PdObj::from(1));
                 Ok(())
             }),
+            "m" | "modify" => hb("modify", hh, |env, hoard| {
+                let modifier = env.pop_result("hoard no modifier")?;
+                let key_obj = env.pop_result("hoard modifier key no stack")?;
+                let key = pd_key(&key_obj)?;
+                let value: Option<PdObj> = hoard.borrow().get(&key).map(PdObj::clone);
+
+                let new_value: PdObj = match (value, modifier) {
+                    (Some(old), PdObj::Block(b)) => sandbox(env, &b, vec![old])?.pop().ok_or(PdError::EmptyStack("hoard modify produced empty stack".to_string()))?,
+                    (None, PdObj::Num(v)) => PdObj::Num(v),
+                    (Some(PdObj::Num(v)), PdObj::Num(m)) => PdObj::from(&*m + &*v),
+                    _ => Err(PdError::BadArgument("idk how to hoard modify".to_string()))?,
+                };
+
+                hoard.borrow_mut().update(key, new_value);
+                Ok(())
+            }),
             "d" | "delete" => hb("delete", hh, |env, hoard| {
                 let key_obj = env.pop_result("hoard update key no stack")?;
                 let key = pd_key(&key_obj)?;
@@ -1865,9 +1908,9 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 Ok(())
             }),
 
-            _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+            _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
         }
-        _ => Err(PdError::InapplicableTrailer(format!("{:?} on {:?}", trailer, obj)))
+        _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
     }
 }
 
@@ -2188,6 +2231,30 @@ pub enum PdKey {
     Num(PdTotalNum),
     String(Rc<Vec<char>>),
     List(Rc<Vec<Rc<PdKey>>>),
+}
+
+impl fmt::Display for PdKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PdKey::Num(n) => write!(formatter, "{}", n),
+            PdKey::String(s) => {
+                // FIXME
+                write!(formatter, "\"")?;
+                for c in s.iter() { write!(formatter, "{}", c)?; }
+                write!(formatter, "\"")
+            }
+            PdKey::List(xs) => {
+                write!(formatter, "[")?;
+                let mut started = false;
+                for x in xs.iter() {
+                    if started { write!(formatter, " ")?; }
+                    started = true;
+                    write!(formatter, "{}", x)?;
+                }
+                write!(formatter, "]")
+            }
+        }
+    }
 }
 
 impl HoardKey for PdKey {
