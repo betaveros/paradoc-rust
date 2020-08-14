@@ -530,6 +530,14 @@ fn just_value(obj: &PdObj) -> Option<PdObj> {
 fn just_any(obj: &PdObj) -> Option<PdObj> {
     Some(PdObj::clone(obj))
 }
+fn seq_as_any(obj: &PdObj) -> Option<PdObj> {
+    match obj {
+        PdObj::List(_) => Some(PdObj::clone(obj)),
+        PdObj::String(_) => Some(PdObj::clone(obj)),
+        PdObj::Hoard(_) => Some(PdObj::clone(obj)),
+        _ => None,
+    }
+}
 fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
     match obj {
         PdObj::Num(n) => Some(Rc::clone(n)),
@@ -1612,7 +1620,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 Ok(())
             }),
             "r" | "reduce" => obb("map", bb, |env, body| {
-                let seq = pop_seq_range_for(env, "map")?;
+                let seq = pop_seq_range_for(env, "reduce")?;
                 let res = pd_reduce(env, body, seq.iter())?;
                 env.push(res);
                 Ok(())
@@ -2414,6 +2422,37 @@ fn pd_min_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdO
     keyed_vec.into_iter().min_by(|x, y| x.0.cmp(&y.0)).map(|x| x.1).ok_or(PdError::BadList("min of empty"))
 }
 
+fn pd_maxima_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
+    let mut best: Option<(PdKey, Vec<PdObj>)> = None;
+    for (k, v) in keyed_vec {
+        match &mut best {
+            None => { best = Some((k, vec![v])); }
+            Some((bk, bvs)) => match k.cmp(bk) {
+                Ordering::Greater => { best = Some((k, vec![v])); }
+                Ordering::Equal => { bvs.push(v); }
+                Ordering::Less => {}
+            }
+        }
+    }
+    Ok(pd_list(best.map_or_else(Vec::new, |(_, bvs)| bvs)))
+}
+fn pd_minima_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
+    let mut best: Option<(PdKey, Vec<PdObj>)> = None;
+    for (k, v) in keyed_vec {
+        match &mut best {
+            None => { best = Some((k, vec![v])); }
+            Some((bk, bvs)) => match k.cmp(bk) {
+                Ordering::Less => { best = Some((k, vec![v])); }
+                Ordering::Equal => { bvs.push(v); }
+                Ordering::Greater => {}
+            }
+        }
+    }
+    Ok(pd_list(best.map_or_else(Vec::new, |(_, bvs)| bvs)))
+}
+
 // TODO if this stabilizes https://github.com/rust-lang/rust/issues/53485
 fn pd_is_sorted_by<F>(seq: &PdSeq, mut proj: F, accept: fn(Ordering) -> bool) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
     let mut prev: Option<PdKey> = None;
@@ -2596,6 +2635,20 @@ pub fn initialize(env: &mut Environment) {
 
     let min_seq_case = unary_seq_case(|_, seq: &PdSeq| Ok(vec![pd_min_by(seq, pd_key)?]));
     let max_seq_case = unary_seq_case(|_, seq: &PdSeq| Ok(vec![pd_max_by(seq, pd_key)?]));
+    let min_seq_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_min_by(seq, pd_key_projector(env, block))?])
+    });
+    let max_seq_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_max_by(seq, pd_key_projector(env, block))?])
+    });
+    let minima_seq_case = unary_seq_case(|_, seq: &PdSeq| Ok(vec![pd_minima_by(seq, pd_key)?]));
+    let maxima_seq_case = unary_seq_case(|_, seq: &PdSeq| Ok(vec![pd_maxima_by(seq, pd_key)?]));
+    let minima_seq_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_minima_by(seq, pd_key_projector(env, block))?])
+    });
+    let maxima_seq_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_maxima_by(seq, pd_key_projector(env, block))?])
+    });
 
     let uncons_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_first().ok_or(PdError::BadList("Uncons of empty list"))?;
@@ -2905,9 +2958,8 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_flatten(seq)])
         },
     });
-    // FIXME
     let flatten_all_case: Rc<dyn Case> = Rc::new(UnaryCase {
-        coerce: just_any,
+        coerce: seq_as_any,
         func: |_, obj| {
             Ok(vec![pd_flatten_all(obj)])
         },
@@ -3190,16 +3242,18 @@ pub fn initialize(env: &mut Environment) {
     add_cases(">m", cc![max_case]);
     add_cases("Õ", cc![min_case]);
     add_cases("Ã", cc![max_case]);
-    add_cases("<r", cc![min_seq_case]);
-    add_cases(">r", cc![max_seq_case]);
+    add_cases("<r", cc![min_seq_case, min_seq_by_case]);
+    add_cases(">r", cc![max_seq_case, max_seq_by_case]);
     add_cases("D", cc![down_case]);
     add_cases("W", cc![seq_words_case, seq_window_case]);
     add_cases("L", cc![abs_case, hoard_len_case, len_case]);
     add_cases("M", cc![neg_case]);
     add_cases("U", cc![signum_case, uniquify_case]);
     add_cases("=g", cc![first_duplicate_case]);
-    add_cases("Œ", cc![min_seq_case]);
-    add_cases("Æ", cc![max_seq_case]);
+    add_cases("Œ", cc![min_seq_case, min_seq_by_case]);
+    add_cases("Æ", cc![max_seq_case, max_seq_by_case]);
+    add_cases("Œs", cc![minima_seq_case, minima_seq_by_case]);
+    add_cases("Æs", cc![maxima_seq_case, maxima_seq_by_case]);
     add_cases("‹", cc![floor_case, hoard_first_case, first_case]);
     add_cases("›", cc![ceil_case, hoard_last_case, last_case]);
     add_cases("«", cc![dec2_case, butlast_case]);
@@ -3245,6 +3299,7 @@ pub fn initialize(env: &mut Environment) {
 
     add_cases(":",   vec![juggle!(a -> a, a)]);
     add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);
+    add_cases("¦",   vec![juggle!(a, b -> a, b, a, b)]);
     add_cases(":a",  vec![juggle!(a, b -> a, b, a)]);
     add_cases("\\",  vec![juggle!(a, b -> b, a)]);
     add_cases("\\a", vec![juggle!(a, b, c -> c, b, a)]);
@@ -3256,6 +3311,15 @@ pub fn initialize(env: &mut Environment) {
     add_cases(";p",  vec![juggle!(_a, _b, c -> c)]);
     add_cases(";a",  vec![juggle!(_a, b, _c -> b)]);
     add_cases("¸",   vec![juggle!(_a, b -> b)]);
+
+    let pop_if_true_case:  Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![] } else { vec![PdObj::clone(a)] })]) });
+    let pop_if_false_case: Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![PdObj::clone(a)] } else { vec![] })]) });
+    let pop_if_case:       Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(if pd_truthy(b) { vec![] } else { vec![PdObj::clone(a)] })]) });
+    let pop_if_not_case:   Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(if pd_truthy(b) { vec![PdObj::clone(a)] } else { vec![] })]) });
+    add_cases(";i",  vec![pop_if_case]);
+    add_cases(";n",  vec![pop_if_not_case]);
+    add_cases(";t",  vec![pop_if_true_case]);
+    add_cases(";f",  vec![pop_if_false_case]);
 
     let pack_one_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![pd_list(vec![PdObj::clone(a)])]) });
     add_cases("†", cc![pack_one_case]);

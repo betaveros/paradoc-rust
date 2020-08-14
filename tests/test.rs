@@ -138,6 +138,11 @@ fn sort() {
 }
 
 #[test]
+fn transpose() {
+    assert_eq!(paradoc::simple_eval("[[1][2 3 4][5 6]]™"), vec![list(vec![list(intvec![1, 2, 5]), list(intvec![3, 6]), list(intvec![4])])]);
+}
+
+#[test]
 fn is_sorted_by() {
     assert_eq!(paradoc::simple_eval("[1 3 5]$p"), intvec![1]);
     assert_eq!(paradoc::simple_eval("[2 5 3]$p"), intvec![0]);
