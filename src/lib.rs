@@ -22,12 +22,14 @@ mod pderror;
 mod input;
 mod slice_util;
 mod string_util;
+mod vec_util;
 mod hoard;
 mod char_info;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
 use crate::string_util::{str_class, int_groups, float_groups};
+use crate::vec_util as vu;
 use crate::hoard::{Hoard, HoardKey};
 use crate::lex::AssignType;
 
@@ -604,6 +606,15 @@ impl IntoIterator for PdSeq {
             PdSeq::String(s) => PdIntoIter::String(s, 0),
             PdSeq::Range(a, b) => PdIntoIter::Range(num_iter::range(a, b)),
         }
+    }
+}
+
+impl<'a> IntoIterator for &'a PdSeq {
+    type Item = PdObj;
+    type IntoIter = PdIter<'a>;
+
+    fn into_iter(self) -> PdIter<'a> {
+        self.iter()
     }
 }
 
@@ -1695,13 +1706,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             }),
             "î" | "identical" => obb("identical", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "identical")?;
-                let res = pd_identical_by(&seq, pd_key_projector(env, body))?;
+                let res = vu::identical_by(seq, pd_key_projector(env, body))?;
                 env.push(PdObj::iverson(res));
                 Ok(())
             }),
             "û" | "unique" => obb("unique", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "unique")?;
-                let res = pd_unique_by(&seq, pd_key_projector(env, body))?;
+                let res = vu::unique_by(seq, pd_key_projector(env, body))?;
                 env.push(PdObj::iverson(res));
                 Ok(())
             }),
@@ -2234,26 +2245,6 @@ fn pd_iterate(env: &mut Environment, func: &Rc<dyn Block>) -> PdResult<(Vec<PdOb
     }
 }
 
-fn key_counter(a: &PdSeq) -> PdResult<HashMap<PdKey, usize>> {
-    let mut ret = HashMap::new();
-    for e in a.iter() {
-        let key = pd_key(&e)?;
-        match ret.get_mut(&key) {
-            Some(place) => { *place = *place + 1usize; }
-            None => { ret.insert(key, 1usize); }
-        }
-    }
-    Ok(ret)
-}
-
-fn key_set(a: &PdSeq) -> PdResult<HashSet<PdKey>> {
-    let mut ret = HashSet::new();
-    for e in a.iter() {
-        ret.insert(pd_key(&e)?);
-    }
-    Ok(ret)
-}
-
 fn pd_build_like(ty: PdSeqBuildType, x: Vec<PdObj>) -> PdObj {
     if ty == PdSeqBuildType::NotString {
         return PdObj::List(Rc::new(x))
@@ -2312,64 +2303,28 @@ fn pd_transpose(seq: &PdSeq) -> Vec<PdObj> {
 
 fn pd_seq_intersection(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     let bty = a.build_type() & b.build_type();
-    let mut counter = key_counter(b)?;
-    let mut acc = Vec::new();
-    for e in a.iter() {
-        let key = pd_key(&e)?;
-        match counter.get_mut(&key) {
-            Some(place) => { if *place > 0 { acc.push(e); *place -= 1; } }
-            None => {}
-        }
-    }
+    let acc = vu::intersection(a, b, pd_key)?;
     Ok(pd_build_like(bty, acc))
 }
 
 fn pd_seq_union(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     let bty = a.build_type() & b.build_type();
-    let mut counter = key_counter(a)?;
-    let mut acc = a.to_new_vec();
-    for e in b.iter() {
-        let key = pd_key(&e)?;
-        match counter.get_mut(&key) {
-            Some(place) => {
-                if *place > 0 { *place -= 1; } else { acc.push(e); }
-            }
-            None => {
-                acc.push(e);
-            }
-        }
-    }
+    let acc = vu::union(a, b, pd_key)?;
     Ok(pd_build_like(bty, acc))
 }
 
 fn pd_seq_set_difference(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     let bty = a.build_type() & b.build_type();
-    let ks = key_set(b)?;
-    let mut acc = Vec::new();
-    for e in a.iter() {
-        if !ks.contains(&pd_key(&e)?) {
-            acc.push(e);
-        }
-    }
-    Ok(pd_build_like(bty, acc))
+    Ok(pd_build_like(bty, vu::set_difference(a, b, pd_key)?))
 }
 
 fn pd_seq_symmetric_difference(a: &PdSeq, b: &PdSeq) -> PdResult<PdObj> {
     let bty = a.build_type() & b.build_type();
-    let mut acc = Vec::new();
-
-    let bks = key_set(b)?;
-    for e in a.iter() {
-        if !bks.contains(&pd_key(&e)?) { acc.push(e); }
-    }
-
-    let aks = key_set(b)?;
-    for e in b.iter() {
-        if !aks.contains(&pd_key(&e)?) { acc.push(e); }
-    }
-
-    Ok(pd_build_like(bty, acc))
+    Ok(pd_build_like(bty, vu::symmetric_difference(a, b, pd_key)?))
 }
+
+trait PdProj : FnMut(&PdObj) -> PdResult<PdKey> {}
+impl<T> PdProj for T where T: FnMut(&PdObj) -> PdResult<PdKey> {}
 
 fn pd_key_projector<'a>(env: &'a mut Environment, func: &'a Rc<dyn Block>) -> impl FnMut(&PdObj) -> PdResult<PdKey> + 'a {
     move |x| -> PdResult<PdKey> {
@@ -2382,175 +2337,34 @@ fn pd_key_projector<'a>(env: &'a mut Environment, func: &'a Rc<dyn Block>) -> im
     }
 }
 
-fn pd_organize_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+fn pd_organize_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
     let bty = seq.build_type();
-    let mut key_order: Vec<PdKey> = Vec::new();
-    let mut groups: HashMap<PdKey, Vec<PdObj>> = HashMap::new();
-
-    for e in seq.iter() {
-        let key = proj(&e)?;
-        match groups.get_mut(&key) {
-            Some(place) => { place.push(e); }
-            None => {
-                key_order.push(PdKey::clone(&key));
-                groups.insert(key, vec![e]);
-            }
-        }
-    }
-
-    // groups.remove() gives us ownership
-    Ok(pd_list(key_order.iter().map(|key| pd_build_like(bty, groups.remove(key).expect("organize internal fail"))).collect()))
+    Ok(pd_list(vu::organize_by(seq, proj)?.into_iter().map(|vs| pd_build_like(bty, vs)).collect()))
 }
-
-fn pd_sort_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
+fn pd_sort_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    Ok(pd_build_like(seq.build_type(), vu::sort_by(seq, proj)?))
+}
+fn pd_max_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    vu::max_by(seq, proj).and_then(|x| x.ok_or(PdError::BadList("max of empty")))
+}
+fn pd_min_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    vu::min_by(seq, proj).and_then(|x| x.ok_or(PdError::BadList("min of empty")))
+}
+fn pd_maxima_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
     let bty = seq.build_type();
-    // sort_by_cached_key is not enough because we also want to force the PdResult
-    let mut keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
-    // and sort_by_key's key function wants us to give ownership of the key :-/
-    keyed_vec.sort_by(|x, y| x.0.cmp(&y.0));
-
-    Ok(pd_build_like(bty, keyed_vec.into_iter().map(|x| x.1).collect()))
+    vu::maxima_by(seq, proj).map(|x| pd_build_like(bty, x))
 }
-
-fn pd_max_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
-    keyed_vec.into_iter().max_by(|x, y| x.0.cmp(&y.0)).map(|x| x.1).ok_or(PdError::BadList("max of empty"))
-}
-
-fn pd_min_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
-    keyed_vec.into_iter().min_by(|x, y| x.0.cmp(&y.0)).map(|x| x.1).ok_or(PdError::BadList("min of empty"))
-}
-
-fn pd_maxima_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
-    let mut best: Option<(PdKey, Vec<PdObj>)> = None;
-    for (k, v) in keyed_vec {
-        match &mut best {
-            None => { best = Some((k, vec![v])); }
-            Some((bk, bvs)) => match k.cmp(bk) {
-                Ordering::Greater => { best = Some((k, vec![v])); }
-                Ordering::Equal => { bvs.push(v); }
-                Ordering::Less => {}
-            }
-        }
-    }
-    Ok(pd_list(best.map_or_else(Vec::new, |(_, bvs)| bvs)))
-}
-fn pd_minima_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let keyed_vec = seq.iter().map(|e| Ok((proj(&e)?, e))).collect::<PdResult<Vec<(PdKey, PdObj)>>>()?;
-    let mut best: Option<(PdKey, Vec<PdObj>)> = None;
-    for (k, v) in keyed_vec {
-        match &mut best {
-            None => { best = Some((k, vec![v])); }
-            Some((bk, bvs)) => match k.cmp(bk) {
-                Ordering::Less => { best = Some((k, vec![v])); }
-                Ordering::Equal => { bvs.push(v); }
-                Ordering::Greater => {}
-            }
-        }
-    }
-    Ok(pd_list(best.map_or_else(Vec::new, |(_, bvs)| bvs)))
-}
-
-// TODO if this stabilizes https://github.com/rust-lang/rust/issues/53485
-fn pd_is_sorted_by<F>(seq: &PdSeq, mut proj: F, accept: fn(Ordering) -> bool) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let mut prev: Option<PdKey> = None;
-    for e in seq.iter() {
-        let cur = proj(&e)?;
-        if let Some(p) = prev {
-            if !accept(p.cmp(&cur)) {
-                return Ok(false)
-            }
-        }
-        prev = Some(cur);
-    }
-    Ok(true)
-}
-
-// TODO: we don't need to hash here, this could take a PdObj projection, but I'm too lazy
-fn pd_group_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let mut acc: Vec<Vec<PdObj>> = Vec::new();
-    let mut cur: Option<(PdKey, Vec<PdObj>)> = None;
+fn pd_minima_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
     let bty = seq.build_type();
-
-    for e in seq.iter() {
-        let key = proj(&e)?;
-        match &mut cur {
-            Some((cur_key, cur_group)) => {
-                if cur_key == &key {
-                    cur_group.push(e);
-                } else {
-                    *cur_key = key;
-                    acc.push(mem::replace(cur_group, vec![e]));
-                }
-            }
-            None => {
-                cur = Some((key, vec![e]));
-            }
-        }
-    }
-
-    match cur {
-        Some((_, cur_group)) => {
-            acc.push(cur_group);
-        }
-        None => {}
-    }
-
-    // groups.remove() gives us ownership
-    Ok(pd_list(acc.into_iter().map(|group| pd_build_like(bty, group)).collect()))
+    vu::minima_by(seq, proj).map(|x| pd_build_like(bty, x))
 }
-
-// TODO: we don't need to hash here, this could take a PdObj projection, but I'm too lazy
-fn pd_identical_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let mut acc: Option<PdKey> = None;
-    for obj in seq.iter() {
-        match &acc {
-            None => { acc = Some(proj(&obj)?); }
-            Some(k) => {
-                if k != &proj(&obj)? { return Ok(false) }
-            }
-        }
-    }
-    Ok(true)
+fn pd_group_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    let groups = vu::group_by(seq, proj)?;
+    let bty = seq.build_type();
+    Ok(pd_list(groups.into_iter().map(|group| pd_build_like(bty, group)).collect()))
 }
-
-fn pd_unique_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<bool> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let mut acc = HashSet::new();
-    for obj in seq.iter() {
-        let key = proj(&obj)?;
-        if acc.contains(&key) {
-            return Ok(false);
-        }
-        acc.insert(key);
-    }
-    Ok(true)
-}
-
-fn pd_uniquify_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let mut acc = Vec::new();
-    let mut seen = HashSet::new();
-    for obj in seq.iter() {
-        let key = proj(&obj)?;
-        if !seen.contains(&key) {
-            acc.push(obj);
-        }
-        seen.insert(key);
-    }
-    Ok(pd_build_like(seq.build_type(), acc))
-}
-
-fn pd_first_duplicate_by<F>(seq: &PdSeq, mut proj: F) -> PdResult<PdObj> where F: FnMut(&PdObj) -> PdResult<PdKey> {
-    let mut acc = HashSet::new();
-    for obj in seq.iter() {
-        let key = proj(&obj)?;
-        if acc.contains(&key) {
-            return Ok(obj);
-        }
-        acc.insert(key);
-    }
-    Err(PdError::BadList("no duplicates"))
+fn pd_uniquify_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    Ok(pd_build_like(seq.build_type(), vu::uniquify_by(seq, proj)?))
 }
 
 fn pd_mul_div_const(env: &mut Environment, obj: &PdObj, mul: usize, div: usize) -> PdResult<Vec<PdObj>> {
@@ -3034,25 +2848,25 @@ pub fn initialize(env: &mut Environment) {
     let identical_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![PdObj::iverson(pd_identical_by(&seq, pd_key)?)])
+            Ok(vec![PdObj::iverson(vu::identical_by(seq, pd_key)?)])
         },
     });
     let unique_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![PdObj::iverson(pd_unique_by(&seq, pd_key)?)])
+            Ok(vec![PdObj::iverson(vu::unique_by(seq, pd_key)?)])
         },
     });
     let uniquify_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![pd_uniquify_by(&seq, pd_key)?])
+            Ok(vec![pd_uniquify_by(seq, pd_key)?])
         },
     });
     let first_duplicate_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![pd_first_duplicate_by(&seq, pd_key)?])
+            Ok(vec![vu::first_duplicate_by(seq, pd_key)?.ok_or(PdError::BadList("no duplicates"))?])
         },
     });
 
@@ -3169,30 +2983,30 @@ pub fn initialize(env: &mut Environment) {
     let is_sorted_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x != Ordering::Greater)?)])
+            Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key, |x| x != Ordering::Greater)?)])
         },
     });
     let is_sorted_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
-        Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x != Ordering::Greater)?)])
+        Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key_projector(env, block), |x| x != Ordering::Greater)?)])
     });
 
     let is_strictly_increasing_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x == Ordering::Less)?)])
+            Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key, |x| x == Ordering::Less)?)])
         },
     });
     let is_strictly_increasing_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
-        Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Less)?)])
+        Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Less)?)])
     });
     let is_strictly_decreasing_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
-            Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key, |x| x == Ordering::Greater)?)])
+            Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key, |x| x == Ordering::Greater)?)])
         },
     });
     let is_strictly_decreasing_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
-        Ok(vec![PdObj::iverson(pd_is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
+        Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
     });
 
     let just_if_case: Rc<dyn Case> = Rc::new(BinaryCase {
