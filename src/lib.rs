@@ -3241,6 +3241,17 @@ pub fn initialize(env: &mut Environment) {
     });
     add_cases("Ig", cc![int_groups_case]);
 
+    let to_float_case: Rc<dyn Case> = n_n![a, a.to_f64().expect("can't to_float")];
+    let string_to_float_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_string,
+        func: |_, s: &Rc<Vec<char>>| Ok(vec![PdObj::from(s.iter().collect::<String>().parse::<f64>().map_err(|_| PdError::BadParse)?)]),
+    });
+    let fixed_point_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_block,
+        func: |env, block| Ok(vec![pd_iterate(env, block)?.1]),
+    });
+    add_cases("F", cc![to_float_case, string_to_float_case, fixed_point_case]);
+
     let float_groups_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
         func: |_, s: &Rc<Vec<char>>| Ok(vec![pd_list(float_groups(&s.iter().collect::<String>()).map(|i| PdObj::from(i)).collect())]),
