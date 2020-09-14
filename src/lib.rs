@@ -26,6 +26,7 @@ mod string_util;
 mod vec_util;
 mod hoard;
 mod char_info;
+mod gamma;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
@@ -2507,6 +2508,8 @@ pub fn initialize(env: &mut Environment) {
     let negative_or_zero_case = n_n![a, PdNum::iverson(a <= &PdNum::from(0))];
     let even_case = n_n![a, PdNum::iverson(a % &PdNum::from(2) == PdNum::from(0))];
     let odd_case  = n_n![a, PdNum::iverson(a % &PdNum::from(2) == PdNum::from(1))];
+    let two_to_the_power_of_case = n_n![a, PdNum::from(2).pow_num(a)];
+    let factorial_case = n_n![a, a.factorial()];
 
     let eq_case = nn_n![a, b, PdNum::iverson(a == b)];
     let lt_case = nn_n![a, b, PdNum::iverson(a < b)];
@@ -2833,6 +2836,21 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let subsequences_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq: &PdSeq| {
+            Ok(vec![pd_list(
+                    vu::subsequences(&seq.to_new_vec()).into_iter().map(pd_list).collect())])
+        },
+    });
+    let permutations_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq: &PdSeq| {
+            Ok(vec![pd_list(
+                    vu::permutations(&seq.to_new_vec()).into_iter().map(pd_list).collect())])
+        },
+    });
+
     let flatten_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq: &PdSeq| {
@@ -3144,6 +3162,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases("¼", cc![frac_14_case]);
     add_cases("¾", cc![frac_34_case]);
     add_cases("²", cc![square_case, square_cartesian_product_case]);
+    add_cases("¡", cc![factorial_case, permutations_case]);
+    add_cases("!p", cc![factorial_case, permutations_case]);
+    add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);
+    add_cases("Ss", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("™", cc![transpose_case]);
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);

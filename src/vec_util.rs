@@ -269,3 +269,41 @@ pub fn first_duplicate_by<I, K: Hash + Eq, E, F>(it: impl IntoIterator<Item=I>, 
     }
     Ok(None)
 }
+
+fn accumulate_subsequences<T: Clone>(prefix: &mut Vec<T>, rem: &[T], acc: &mut Vec<Vec<T>>) {
+    match rem.split_first() {
+        None => acc.push(prefix.clone()),
+        Some((h, t)) => {
+            accumulate_subsequences(prefix, t, acc);
+            prefix.push(h.clone());
+            accumulate_subsequences(prefix, t, acc);
+            prefix.pop().expect("accumulate subsequences wtf");
+        }
+    }
+}
+
+pub fn subsequences<T: Clone>(a: &[T]) -> Vec<Vec<T>> {
+    let mut acc = Vec::new();
+    accumulate_subsequences(&mut Vec::new(), a, &mut acc);
+    acc
+}
+
+fn accumulate_permutations<T: Clone>(prefix: &mut Vec<T>, rem: &[T], acc: &mut Vec<Vec<T>>) {
+    if rem.is_empty() {
+        acc.push(prefix.clone());
+    } else {
+        for (i, e) in rem.iter().enumerate() {
+            let mut missing = rem.to_vec();
+            missing.remove(i);
+            prefix.push(e.clone());
+            accumulate_permutations(prefix, &missing, acc);
+            prefix.pop().expect("accumulate_permutations wtf");
+        }
+    }
+}
+
+pub fn permutations<T: Clone>(a: &[T]) -> Vec<Vec<T>> {
+    let mut acc = Vec::new();
+    accumulate_permutations(&mut Vec::new(), a, &mut acc);
+    acc
+}

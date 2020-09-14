@@ -13,6 +13,8 @@ use num_traits::pow::Pow;
 use num_traits::sign::Signed;
 use num_traits::cast::ToPrimitive;
 
+use crate::gamma;
+
 #[derive(Debug, Clone)]
 pub enum PdNum {
     Int(BigInt),
@@ -56,6 +58,14 @@ fn pow_big_ints(a: &BigInt, b: &BigInt) -> PdNum {
         num::bigint::Sign::Plus => PdNum::from(Pow::pow(a, b.magnitude())),
         num::bigint::Sign::Minus => PdNum::from(a.to_f64().expect("exponent c'mon").pow(b.to_f64().expect("exponent c'mon"))),
     }
+}
+
+fn factorial_big_int(a: &BigInt) -> BigInt {
+    let mut ret = BigInt::from(1);
+    for i in num_iter::range_inclusive(BigInt::from(1), BigInt::clone(a)) {
+        ret *= i;
+    }
+    ret
 }
 
 impl PdNum {
@@ -191,6 +201,14 @@ impl PdNum {
             (PdNum::Char  (a), PdNum::Int   (b)) => pow_big_ints(a, b),
             (PdNum::Char  (a), PdNum::Float (b)) => PdNum::from(a.to_f64().expect("pow pls").pow(b)),
             (PdNum::Char  (a), PdNum::Char  (b)) => pow_big_ints(a, b),
+        }
+    }
+
+    pub fn factorial(&self) -> PdNum {
+        match self {
+            PdNum::Int(a) => PdNum::Int(factorial_big_int(a)),
+            PdNum::Char(a) => PdNum::Char(factorial_big_int(a)),
+            PdNum::Float(f) => PdNum::Float(gamma::gamma(f + 1.0)),
         }
     }
 
