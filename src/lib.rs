@@ -1392,6 +1392,27 @@ fn pd_filter_indices(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, ft
     Ok(acc)
 }
 
+fn pd_take_drop_while_split_point(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<usize> {
+    let mut split_point = 0;
+    yx_loop(env, it, |env, index, obj| {
+        if sandbox_truthy(env, &func, vec![PdObj::clone(&obj)])? {
+            split_point = index + 1; Ok(())
+        } else {
+            Err(PdError::Break)
+        }
+    })?;
+    Ok(split_point)
+}
+
+fn pd_take_while(env: &mut Environment, func: &Rc<dyn Block>, seq: &PdSeq) -> PdResult<PdSeq> {
+    let split_point = pd_take_drop_while_split_point(env, func, seq.iter())?;
+    Ok(seq.pythonic_split_left(split_point as isize))
+}
+fn pd_drop_while(env: &mut Environment, func: &Rc<dyn Block>, seq: &PdSeq) -> PdResult<PdSeq> {
+    let split_point = pd_take_drop_while_split_point(env, func, seq.iter())?;
+    Ok(seq.pythonic_split_right(split_point as isize))
+}
+
 fn pd_count_equal(it: PdIter, obj: &PdObj) -> usize {
     let mut count = 0usize;
     for e in it {
@@ -2560,6 +2581,7 @@ pub fn initialize(env: &mut Environment) {
     let div_case = nn_n![a, b, a / b];
     let mod_case = nn_n![a, b, a % b];
     let intdiv_case = nn_n![a, b, a.div_floor(b)];
+    let pow_case = nn_n![a, b, a.pow_num(b)];
 
     let bitand_case = nn_n![a, b, a & b];
     let bitor_case  = nn_n![a, b, a | b];
@@ -2669,6 +2691,12 @@ pub fn initialize(env: &mut Environment) {
     });
     let reject_indices_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         Ok(vec![pd_list(pd_filter_indices(env, a, b.iter(), FilterType::Reject)?)])
+    });
+    let take_while_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_take_while(env, a, b)?.to_rc_pd_obj()])
+    });
+    let drop_while_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        Ok(vec![pd_drop_while(env, a, b)?.to_rc_pd_obj()])
     });
 
     let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(a * a))]) });
@@ -3174,22 +3202,18 @@ pub fn initialize(env: &mut Environment) {
         Ok(vec![PdObj::iverson(vu::is_sorted_by(seq, pd_key_projector(env, block), |x| x == Ordering::Greater)?)])
     });
 
-    let just_if_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_any,
-        coerce2: just_block,
-        func: |env, cond, block| {
+    let just_if_case: Rc<dyn Case> = Rc::new(BinaryAnyCase {
+        func: |env, cond, target| {
             if pd_truthy(&cond) {
-                block.run(env)?;
+                apply_on(env, PdObj::clone(target))?;
             }
             Ok(vec![])
         },
     });
-    let just_unless_case: Rc<dyn Case> = Rc::new(BinaryCase {
-        coerce1: just_any,
-        coerce2: just_block,
-        func: |env, cond, block| {
+    let just_unless_case: Rc<dyn Case> = Rc::new(BinaryAnyCase {
+        func: |env, cond, target| {
             if !pd_truthy(&cond) {
-                block.run(env)?;
+                apply_on(env, PdObj::clone(target))?;
             }
             Ok(vec![])
         },
@@ -3202,17 +3226,21 @@ pub fn initialize(env: &mut Environment) {
     add_cases("T", cc![cartesian_product_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
+    add_cases("ˆ", cc![pow_case]);
+    add_cases("*p", cc![pow_case]);
     add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
     add_cases("&", cc![bitand_case, intersection_case, just_if_case]);
     add_cases("|", cc![bitor_case, union_case, just_unless_case]);
+    add_cases("If", cc![just_if_case]);
+    add_cases("Ul", cc![just_unless_case]);
     add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
     add_cases("(", cc![dec_case, uncons_case]);
     add_cases(")", cc![inc_case, unsnoc_case]);
     add_cases("=", cc![index_hoard_case, eq_case, index_case, find_case]);
     add_cases("@", cc![find_index_str_str_case, find_index_equal_case, find_index_case]);
     add_cases("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
-    add_cases("<", cc![lt_case, lt_slice_case]);
-    add_cases(">", cc![gt_case, ge_slice_case]);
+    add_cases("<", cc![lt_case, lt_slice_case, take_while_case]);
+    add_cases(">", cc![gt_case, ge_slice_case, drop_while_case]);
     add_cases("<c", cc![cycle_left_case]);
     add_cases(">c", cc![cycle_right_case]);
     add_cases("<o", cc![cycle_left_one_case]);
@@ -3247,10 +3275,13 @@ pub fn initialize(env: &mut Environment) {
     add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("Ss", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("™", cc![transpose_case]);
+    add_cases("Tt", cc![transpose_case]);
     add_cases(" r", cc![space_join_case]);
     add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);
     add_cases("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
     add_cases("Ð", cc![down_one_range_case, map_down_singleton_case]);
+    add_cases("Fo", cc![flatten_case]);
+    add_cases("Fl", cc![flatten_all_case]);
     add_cases("…", cc![flatten_all_case, to_range_case]);
     add_cases("¨", cc![flatten_case, til_range_case]);
     add_cases("´", cc![range_len_keep_case]);
@@ -3389,6 +3420,11 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("∅", 0);
     env.insert_builtin("α", 1);
     env.insert_builtin("Ep", 1e-9);
+    env.insert_builtin("Pi", std::f64::consts::PI);
+    env.insert_builtin("Ee", std::f64::consts::E);
+    let golden_ratio: f64 = 1.0 + 5.0f64.sqrt() / 2.0;
+    env.insert_builtin("Ph", golden_ratio);
+    env.insert_builtin("Phi", golden_ratio);
 
     env.insert_builtin("Da", str_class("0-9"));
     env.insert_builtin("Ua", str_class("A-Z"));
