@@ -15,6 +15,7 @@ use num_traits::pow::Pow;
 use num_traits::identities::Zero;
 use std::collections::{HashSet, HashMap};
 use std::cell::RefCell;
+use std::iter::FromIterator;
 use rand;
 
 mod lex;
@@ -970,6 +971,15 @@ fn seq_range(obj: &PdObj) -> Option<PdSeq> {
         _ => just_seq(obj),
     }
 }
+fn seq_range_one(obj: &PdObj) -> Option<PdSeq> {
+    match obj {
+        PdObj::Num(num) => match &**num {
+            PdNum::Int(a) => Some(PdSeq::Range(BigInt::from(1), a + 1)),
+            _ => None,
+        },
+        _ => just_seq(obj),
+    }
+}
 fn seq_num_singleton(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::Num(_) => Some(PdSeq::List(Rc::new(vec![PdObj::clone(obj)]))),
@@ -1425,6 +1435,25 @@ fn pd_find_entry(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: F
     found.ok_or(PdError::EmptyResult("find entry fail".to_string()))
 }
 
+struct StringBlock {
+    name: &'static str,
+    string: Rc<Vec<char>>,
+    f: fn(&mut Environment, &Rc<Vec<char>>) -> PdUnit,
+}
+impl Debug for StringBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "StringBlock {{ name: {:?}, string: {:?}, f: ??? }}", self.name, self.string)
+    }
+}
+impl Block for StringBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        (self.f)(env, &self.string)
+    }
+    fn code_repr(&self) -> String {
+        format!("{}_{}", self.string.iter().collect::<String>(), self.name)
+    }
+}
+
 struct OneBodyBlock {
     name: &'static str,
     body: Rc<dyn Block>,
@@ -1445,6 +1474,10 @@ impl Block for OneBodyBlock {
 }
 fn pop_seq_range_for(env: &mut Environment, name: &'static str) -> PdResult<PdSeq> {
     let opt_seq = seq_range(&env.pop_result(format!("{} no stack", name).as_str())?);
+    opt_seq.ok_or(PdError::BadArgument(format!("{} coercion fail", name)))
+}
+fn pop_seq_range_one_for(env: &mut Environment, name: &'static str) -> PdResult<PdSeq> {
+    let opt_seq = seq_range_one(&env.pop_result(format!("{} no stack", name).as_str())?);
     opt_seq.ok_or(PdError::BadArgument(format!("{} coercion fail", name)))
 }
 
@@ -1575,6 +1608,10 @@ impl CodeBlock {
     }
 }
 
+fn stb(name: &'static str, s: &Rc<Vec<char>>, f: fn(&mut Environment, &Rc<Vec<char>>) -> PdUnit) -> PdResult<(PdObj, bool)> {
+    let string: Rc<Vec<char>> = Rc::clone(s);
+    Ok(((PdObj::Block(Rc::new(StringBlock { name, string, f }))), false))
+}
 fn obb(name: &'static str, bb: &Rc<dyn Block>, f: fn(&mut Environment, &Rc<dyn Block>) -> PdUnit) -> PdResult<(PdObj, bool)> {
     let body: Rc<dyn Block> = Rc::clone(bb);
     Ok(((PdObj::Block(Rc::new(OneBodyBlock { name, body, f }))), false))
@@ -1583,6 +1620,21 @@ fn hb(name: &'static str, h: &Rc<RefCell<PdHoard>>, f: fn(&mut Environment, &Rc<
     let hoard: Rc<RefCell<PdHoard>> = Rc::clone(h);
     Ok(((PdObj::Block(Rc::new(HoardBlock { name, hoard, f }))), false))
 }
+
+
+fn simple_interpolate<S>(env: &mut Environment, string: &Vec<char>) -> PdResult<S> where S: FromIterator<char> {
+    let slot_count = string.iter().filter(|c| **c == '%').count();
+    let mut objs = env.pop_n_result(slot_count, "interpolate stack failed")?.into_iter();
+    // somebody needs to own the String while we .chars() it, meh
+    let ss: Vec<String> = string.iter().map(|c| {
+        match c {
+            '%' => env.to_string(&objs.next().expect("interpolate objs count inconsistent")),
+            cc => cc.to_string(),
+        }
+    }).collect();
+    Ok(ss.iter().flat_map(|c| c.chars()).collect())
+}
+
 fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trailer) -> PdResult<(PdObj, bool)> {
     let mut trailer: &str = trailer0.0.as_ref();
     trailer = trailer.strip_prefix('_').unwrap_or(trailer);
@@ -1605,6 +1657,22 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
                 _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
             }
+            _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
+        }
+        PdObj::String(s) => match trailer {
+            "i" | "interpolate" => stb("interpolate", s, |env, string| {
+                let res = simple_interpolate::<Vec<char>>(env, string)?;
+                env.push(PdObj::String(Rc::new(res)));
+                Ok(())
+            }),
+            "o" | "interoutput" => stb("interoutput", s, |env, string| {
+                print!("{}", simple_interpolate::<String>(env, string)?);
+                Ok(())
+            }),
+            "p" | "interprint" => stb("interprint", s, |env, string| {
+                println!("{}", simple_interpolate::<String>(env, string)?);
+                Ok(())
+            }),
             _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
         }
         PdObj::Block(bb) => match trailer {
@@ -1640,16 +1708,28 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(res);
                 Ok(())
             }),
+            "o" | "onemap" => obb("onemap", bb, |env, body| {
+                let seq = pop_seq_range_one_for(env, "onemap")?;
+                let res = pd_map(env, body, &seq)?;
+                env.push(res);
+                Ok(())
+            }),
             "f" | "filter" => obb("filter", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "filter")?;
                 let res = pd_filter(env, body, seq.iter(), FilterType::Filter)?;
                 env.push(pd_list(res));
                 Ok(())
             }),
-            "g" | "get" => obb("map", bb, |env, body| {
-                let seq = pop_seq_range_for(env, "map")?;
+            "g" | "get" => obb("get", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "get")?;
                 let res = pd_find_entry(env, body, seq.iter(), FilterType::Filter)?.1;
                 env.push(res);
+                Ok(())
+            }),
+            "i" | "index" => obb("index", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "index")?;
+                let res = pd_find_entry(env, body, seq.iter(), FilterType::Filter)?.0;
+                env.push(PdObj::from(res));
                 Ok(())
             }),
             "j" | "reject" => obb("reject", bb, |env, body| {
@@ -1787,7 +1867,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.extend(res);
                 Ok(())
             }),
-            "ø" | "organize" => obb("organize", bb, |env, body| {
+            "ø" | "org" | "organize" => obb("organize", bb, |env, body| {
                 let seq = pop_seq_range_for(env, "organize")?;
                 let res = pd_organize_by(&seq, pd_key_projector(env, body))?;
                 env.push(res);
