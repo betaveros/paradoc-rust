@@ -2182,6 +2182,30 @@ macro_rules! juggle {
 
 fn pd_list(xs: Vec<PdObj>) -> PdObj { PdObj::List(Rc::new(xs)) }
 
+fn pd_cartesian_product_helper(bty: PdSeqBuildType, prefix: &[PdObj], xs: &[&PdSeq]) -> PdObj {
+    match xs.split_first() {
+        None => pd_build_like(bty, prefix.to_vec()),
+        Some((h, t)) => {
+            let new_bty = bty & h.build_type();
+            pd_list(h.iter().map(|e| {
+                let mut new_prefix = prefix.to_vec();
+                new_prefix.push(e);
+                pd_cartesian_product_helper(new_bty, &new_prefix, t)
+            }).collect())
+        }
+    }
+}
+
+fn pd_cartesian_product(xss: &[&PdSeq]) -> PdObj {
+    pd_cartesian_product_helper(PdSeqBuildType::String, &Vec::new(), xss)
+}
+
+fn pd_cartesian_power(xs: &PdSeq, n: usize) -> PdObj {
+    let mut vec = Vec::new();
+    vec.resize_with(n, || xs);
+    pd_cartesian_product(&vec)
+}
+
 fn pd_truthy(x: &PdObj) -> bool {
     match x {
         PdObj::Num(n) => n.is_nonzero(),
@@ -2700,6 +2724,7 @@ pub fn initialize(env: &mut Environment) {
     });
 
     let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(a * a))]) });
+    let cube_case     : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(&(a * a) * a))]) });
 
     let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
 
@@ -2920,6 +2945,33 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let cat_between_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: list_singleton,
+        coerce2: list_singleton,
+        func: |_, seq1: &Rc<Vec<PdObj>>, seq2: &Rc<Vec<PdObj>>| {
+            let mut v = Vec::new();
+            v.extend((&**seq1).iter().cloned());
+            v.extend((&**seq2).iter().cloned());
+            v.extend((&**seq1).iter().cloned());
+
+            Ok(vec![(PdObj::List(Rc::new(v)))])
+        },
+    });
+
+    let cat_flanking_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: list_singleton,
+        coerce2: list_singleton,
+        func: |_, seq1: &Rc<Vec<PdObj>>, seq2: &Rc<Vec<PdObj>>| {
+            let mut v = Vec::new();
+            v.extend((&**seq2).iter().cloned());
+            v.extend((&**seq1).iter().cloned());
+            v.extend((&**seq2).iter().cloned());
+
+            Ok(vec![(PdObj::List(Rc::new(v)))])
+        },
+    });
+
+
     let cartesian_product_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: seq_range,
@@ -2939,8 +2991,21 @@ pub fn initialize(env: &mut Environment) {
     let square_cartesian_product_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq: &PdSeq| {
-            Ok(vec![pd_list(
-                    seq.iter().map(|e1| pd_list(seq.iter().map(|e2| pd_list(vec![PdObj::clone(&e1), e2])).collect())).collect())])
+            Ok(vec![pd_cartesian_power(seq, 2)])
+        },
+    });
+    let cube_cartesian_product_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq: &PdSeq| {
+            Ok(vec![pd_cartesian_power(seq, 3)])
+        },
+    });
+
+    let cartesian_power_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: just_num,
+        func: |_, seq: &PdSeq, n| {
+            Ok(vec![pd_cartesian_power(seq, n.to_usize().ok_or(PdError::BadArgument("bad cartesian power exponent".to_string()))?)])
         },
     });
 
@@ -3220,14 +3285,16 @@ pub fn initialize(env: &mut Environment) {
     });
 
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
+    add_cases("Cb", cc![cat_between_case]);
+    add_cases("Cf", cc![cat_flanking_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
     add_cases("¯", cc![antiminus_case, anti_set_difference_case]);
     add_cases("*", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case]);
     add_cases("T", cc![cartesian_product_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
-    add_cases("ˆ", cc![pow_case]);
-    add_cases("*p", cc![pow_case]);
+    add_cases("ˆ", cc![pow_case, cartesian_power_case]);
+    add_cases("*p", cc![pow_case, cartesian_power_case]);
     add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
     add_cases("&", cc![bitand_case, intersection_case, just_if_case]);
     add_cases("|", cc![bitor_case, union_case, just_unless_case]);
@@ -3270,6 +3337,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("¼", cc![frac_14_case]);
     add_cases("¾", cc![frac_34_case]);
     add_cases("²", cc![square_case, square_cartesian_product_case]);
+    add_cases("³", cc![cube_case, cube_cartesian_product_case]);
     add_cases("¡", cc![factorial_case, permutations_case]);
     add_cases("!p", cc![factorial_case, permutations_case]);
     add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);

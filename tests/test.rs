@@ -14,7 +14,19 @@ fn list(xs: Vec<PdObj>) -> PdObj {
 
 macro_rules! intvec {
     ($($case:expr),*) => {
-        vec![$( int($case), )*];
+        vec![$( int($case) ),*];
+    }
+}
+
+macro_rules! lv {
+    ($($case:expr),*) => {
+        list(vec![$( $case ),*]);
+    }
+}
+
+macro_rules! liv {
+    ($($case:expr),*) => {
+        list(intvec![$( $case ),*]);
     }
 }
 
@@ -27,7 +39,7 @@ fn basic() {
 
 #[test]
 fn readme() {
-    assert_eq!(paradoc::simple_eval("¹²m"), vec![list(intvec![0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100])]);
+    assert_eq!(paradoc::simple_eval("¹²m"), vec![liv![0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100]]);
 }
 
 #[test]
@@ -48,8 +60,8 @@ fn bool_not() {
 
 #[test]
 fn map() {
-    assert_eq!(paradoc::simple_eval("[3 4])m"), vec![list(intvec![4, 5])]);
-    assert_eq!(paradoc::simple_eval("[3 4]{Y+}%"), vec![list(intvec![3, 5])]);
+    assert_eq!(paradoc::simple_eval("[3 4])m"), vec![liv![4, 5]]);
+    assert_eq!(paradoc::simple_eval("[3 4]{Y+}%"), vec![liv![3, 5]]);
 }
 
 #[test]
@@ -59,8 +71,8 @@ fn block() {
 
 #[test]
 fn short_block() {
-    assert_eq!(paradoc::simple_eval("[3 4]βm))"), vec![list(intvec![5, 6])]);
-    assert_eq!(paradoc::simple_eval("[3 4]γm)))"), vec![list(intvec![6, 7])]);
+    assert_eq!(paradoc::simple_eval("[3 4]βm))"), vec![liv![5, 6]]);
+    assert_eq!(paradoc::simple_eval("[3 4]γm)))"), vec![liv![6, 7]]);
 }
 
 #[test]
@@ -101,16 +113,16 @@ fn indexing() {
 }
 #[test]
 fn slicing() {
-    assert_eq!(paradoc::simple_eval("[3 7 2 5]1<q>"), vec![list(intvec![3]), list(intvec![7, 2, 5])]);
+    assert_eq!(paradoc::simple_eval("[3 7 2 5]1<q>"), vec![liv![3], liv![7, 2, 5]]);
 }
 
 #[test]
 fn looping() {
     assert_eq!(paradoc::simple_eval("[2 5 3])e"), intvec![3, 6, 4]);
-    assert_eq!(paradoc::simple_eval("[2 5 3])m"), vec![list(intvec![3, 6, 4])]);
-    assert_eq!(paradoc::simple_eval("[2 5 3 6 1]{4<}f"), vec![list(intvec![2, 3, 1])]);
-    assert_eq!(paradoc::simple_eval("[2 5 3]3-v"), vec![list(intvec![-1, 2, 0])]);
-    assert_eq!(paradoc::simple_eval("9[2 5 3]-y"), vec![list(intvec![7, 4, 6])]);
+    assert_eq!(paradoc::simple_eval("[2 5 3])m"), vec![liv![3, 6, 4]]);
+    assert_eq!(paradoc::simple_eval("[2 5 3 6 1]{4<}f"), vec![liv![2, 3, 1]]);
+    assert_eq!(paradoc::simple_eval("[2 5 3]3-v"), vec![liv![-1, 2, 0]]);
+    assert_eq!(paradoc::simple_eval("9[2 5 3]-y"), vec![liv![7, 4, 6]]);
 }
 
 #[test]
@@ -128,13 +140,47 @@ fn quantifiers() {
 
 #[test]
 fn organize() {
-    assert_eq!(paradoc::simple_eval("5{2%}ø"), vec![list(vec![list(intvec![0, 2, 4]), list(intvec![1, 3])])]);
+    assert_eq!(paradoc::simple_eval("5{2%}ø"), vec![lv![liv![0, 2, 4], liv![1, 3]]]);
 }
 
 #[test]
 fn sort() {
-    assert_eq!(paradoc::simple_eval("[3 1 4 1 5]$"), vec![list(intvec![1, 1, 3, 4, 5])]);
-    assert_eq!(paradoc::simple_eval("[3 1 4 1 5]M_$"), vec![list(intvec![5, 4, 3, 1, 1])]);
+    assert_eq!(paradoc::simple_eval("[3 1 4 1 5]$"), vec![liv![1, 1, 3, 4, 5]]);
+    assert_eq!(paradoc::simple_eval("[3 1 4 1 5]M_$"), vec![liv![5, 4, 3, 1, 1]]);
+}
+
+#[test]
+fn products() {
+    assert_eq!(paradoc::simple_eval("[2 4][6 0 1]*"), vec![
+        lv![
+            liv![2, 6], liv![2, 0], liv![2, 1],
+            liv![4, 6], liv![4, 0], liv![4, 1]
+        ]
+    ]);
+    assert_eq!(paradoc::simple_eval("[2 4][6 0 1]T"), vec![
+        lv![
+            lv![liv![2, 6], liv![2, 0], liv![2, 1]],
+            lv![liv![4, 6], liv![4, 0], liv![4, 1]]
+        ]
+    ]);
+    assert_eq!(paradoc::simple_eval("[2 3]²"), vec![
+        lv![
+            lv![liv![2, 2], liv![2, 3]],
+            lv![liv![3, 2], liv![3, 3]]
+        ]
+    ]);
+    assert_eq!(paradoc::simple_eval("[2 3]³"), vec![
+         lv![
+            lv![
+                lv![liv![2, 2, 2], liv![2, 2, 3]],
+                lv![liv![2, 3, 2], liv![2, 3, 3]]
+            ],
+            lv![
+                lv![liv![3, 2, 2], liv![3, 2, 3]],
+                lv![liv![3, 3, 2], liv![3, 3, 3]]
+            ]
+         ]
+    ]);
 }
 
 #[test]
