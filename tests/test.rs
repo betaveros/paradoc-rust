@@ -217,3 +217,11 @@ fn split() {
     assert_eq!(paradoc::simple_eval("[1 2 3 4]2÷"), vec![list(vec![list(intvec![1, 2]), list(intvec![3, 4])])]);
     assert_eq!(paradoc::simple_eval("\"12345\"2/"), vec![list(vec![PdObj::from("12"), PdObj::from("34"), PdObj::from("5")])]);
 }
+
+#[test]
+fn base_conversion() {
+    assert_eq!(paradoc::simple_eval("[2 0 1]3B"), intvec![19]);
+    assert_eq!(paradoc::simple_eval("[2m 0 1m]3B"), intvec![-19]);
+    assert_eq!(paradoc::simple_eval("19 3B"), vec![list(intvec![2, 0, 1])]);
+    assert_eq!(paradoc::simple_eval("19m 3B"), vec![list(intvec![-2, 0, -1])]);
+}

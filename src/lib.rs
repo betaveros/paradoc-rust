@@ -28,6 +28,7 @@ mod vec_util;
 mod hoard;
 mod char_info;
 mod gamma;
+mod base;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
@@ -3024,6 +3025,30 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let to_base_digits_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_num,
+        coerce2: just_num,
+        func: |_, num0, base0| {
+            // TODO maybe preserve Char/Intiness?
+            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
+            let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
+            Ok(vec![pd_list(base::to_base_digits(&base, num).into_iter().map(|x| PdObj::from(x)).collect())])
+        },
+    });
+    let from_base_digits_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: just_num,
+        func: |_, digits0, base0| {
+            // TODO lol
+            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
+            let digits = digits0.iter().map(|x| match x {
+                PdObj::Num(num) => num.to_bigint().ok_or(PdError::BadFloat),
+                _ => Err(PdError::BadArgument("from base digits type fail".to_string())),
+            }).collect::<PdResult<Vec<BigInt>>>()?;
+            Ok(vec![PdObj::from(base::from_base_digits(&base, &digits))])
+        },
+    });
+
     let flatten_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq: &PdSeq| {
@@ -3342,6 +3367,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("!p", cc![factorial_case, permutations_case]);
     add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("Ss", cc![two_to_the_power_of_case, subsequences_case]);
+    add_cases("B", cc![to_base_digits_case, from_base_digits_case]);
     add_cases("™", cc![transpose_case]);
     add_cases("Tt", cc![transpose_case]);
     add_cases(" r", cc![space_join_case]);
