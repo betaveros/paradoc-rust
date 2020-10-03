@@ -153,6 +153,15 @@ impl Environment {
         Ok(ret)
     }
 
+    fn index_stack(&mut self, i: usize) -> Option<&PdObj> {
+        self.try_ensure_length(i + 1);
+        if i < self.stack.len() {
+            Some(&self.stack[self.stack.len() - 1 - i])
+        } else {
+            None
+        }
+    }
+
     fn take_stack(&mut self) -> Vec<PdObj> {
         mem::take(&mut self.stack)
     }
@@ -163,6 +172,21 @@ impl Environment {
 
     fn pop_stack_marker(&mut self) -> Option<usize> {
         self.marker_stack.pop()
+    }
+
+    fn try_ensure_length(&mut self, n: usize) {
+        if self.stack.len() < n {
+            let mut acc = Vec::new();
+            for _ in 0..(n - self.stack.len()) {
+                match self.run_stack_trigger() {
+                    Some(obj) => acc.push(obj),
+                    None => break
+                }
+            }
+            acc.reverse();
+            acc.extend(self.stack.drain(..));
+            self.stack = acc;
+        }
     }
 
     fn maximize_length(&mut self) {
@@ -359,17 +383,23 @@ pub trait Block : Debug {
     fn code_repr(&self) -> String;
 }
 
-fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> Result<Vec<PdObj>, PdError> {
+fn sandbox(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> PdResult<Vec<PdObj>> {
     env.run_on_bracketed_shadow(ShadowType::Normal, |inner| {
         inner.extend(args);
         func.run(inner)?;
         Ok(inner.take_stack())
     })
 }
-fn sandbox_truthy(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> Result<bool, PdError> {
+fn sandbox_truthy(env: &mut Environment, func: &Rc<dyn Block>, args: Vec<PdObj>) -> PdResult<bool> {
     let res = sandbox(env, func, args)?;
     let last = res.last().ok_or(PdError::EmptyStack("sandbox truthy bad".to_string()))?;
     Ok(pd_truthy(last))
+}
+fn sandbox_check_against(env: &mut Environment, condition: &PdObj, target: PdObj) -> PdResult<bool> {
+    match condition {
+        PdObj::Block(b) => sandbox_truthy(env, b, vec![target]),
+        _ => Ok(condition == &target),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3375,6 +3405,11 @@ pub fn initialize(env: &mut Environment) {
         },
     });
 
+    let index_stack_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_num,
+        func: |env, a| Ok(vec![PdObj::clone(env.index_stack(a.to_usize().ok_or(PdError::BadArgument("can't index stack bad".to_string()))?).ok_or(PdError::EmptyStack("index stack".to_string()))?)])
+    });
+
     add_cases("+", cc![plus_case, cat_list_case, filter_case]);
     add_cases("Cb", cc![cat_between_case]);
     add_cases("Cf", cc![cat_flanking_case]);
@@ -3450,7 +3485,7 @@ pub fn initialize(env: &mut Environment) {
 
     add_cases("G", cc![group_case, gcd_case, group_by_case]);
     add_cases("Ø", cc![organize_case, organize_by_case]);
-    add_cases("$", cc![sort_case, sort_by_case]);
+    add_cases("$", cc![index_stack_case, sort_case, sort_by_case]);
     add_cases("$p", cc![is_sorted_case, is_sorted_by_case]);
     add_cases("<p", cc![is_strictly_increasing_case, is_strictly_increasing_by_case]);
     add_cases(">p", cc![is_strictly_decreasing_case, is_strictly_decreasing_by_case]);
@@ -3643,6 +3678,73 @@ pub fn initialize(env: &mut Environment) {
             list.reverse();
             env.push(pd_list(list));
             Ok(())
+        },
+    });
+    env.insert_builtin("]c", BuiltIn {
+        name: "]_case".to_string(),
+        func: |env| {
+            let case_list = env.pop_until_stack_marker();
+            let target = env.pop_result("]_case: no target")?;
+            for case in case_list {
+                match case {
+                    PdObj::List(body) => match body.split_first() {
+                        None => return Err(PdError::BadArgument("]_case: empty case".to_string())),
+                        Some((condition, result)) => {
+                            if sandbox_check_against(env, condition, PdObj::clone(&target))? {
+                                for x in result {
+                                    apply_on(env, PdObj::clone(x))?;
+                                }
+                                break
+                            }
+                        }
+                    }
+                    _ => return Err(PdError::BadArgument("]_case: non-list case".to_string()))
+                }
+            }
+            Ok(())
+        },
+    });
+    env.insert_builtin("]s", BuiltIn {
+        name: "]_stream".to_string(),
+        func: |env| {
+            let case_list = env.pop_until_stack_marker();
+            let target = env.pop_result("]_stream: no target")?;
+            for case in case_list.chunks_exact(2) {
+                let condition = &case[0];
+                let result = &case[1];
+                if sandbox_check_against(env, &condition, PdObj::clone(&target))? {
+                    apply_on(env, PdObj::clone(result))?;
+                    break
+                }
+            }
+            Ok(())
+        },
+    });
+    env.insert_builtin("]_check", BuiltIn {
+        name: "]_check".to_string(),
+        func: |env| {
+            let check_list = env.pop_until_stack_marker();
+            let n = check_list.len();
+            let mut failures = Vec::new();
+            for (i, condition) in check_list.iter().rev().enumerate() {
+                match env.index_stack(i).cloned() {
+                    None => {
+                        failures.push(format!("- {} ({} from top) of {}: not enough objects on stack for {}", n - i, i, n, condition))
+                    }
+                    Some(target) => if !sandbox_check_against(env, condition, PdObj::clone(&target))? {
+                        failures.push(format!("- {} ({} from top) of {}: condition {} not satisfied by target {}", n - i, i, n, condition, target))
+                    }
+                }
+            }
+
+            if failures.len() == 0 {
+                Ok(())
+            } else {
+                failures.reverse();
+                let msg = format!("Stack check failed!\n{}", failures.join("\n"));
+                println!("{}", msg);
+                Err(PdError::AssertError(msg))
+            }
         },
     });
     env.insert_builtin("~", BuiltIn {
