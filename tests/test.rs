@@ -163,6 +163,15 @@ fn products() {
             lv![liv![4, 6], liv![4, 0], liv![4, 1]]
         ]
     ]);
+    assert_eq!(paradoc::simple_eval("[2 4][6 0 1]+_B"), vec![
+        liv![8, 2, 3, 10, 4, 5]
+    ]);
+    assert_eq!(paradoc::simple_eval("[2 4][6 0 1]+_T"), vec![
+        lv![
+            liv![8, 2, 3],
+            liv![10, 4, 5]
+        ]
+    ]);
     assert_eq!(paradoc::simple_eval("[2 3]²"), vec![
         lv![
             lv![liv![2, 2], liv![2, 3]],
@@ -185,7 +194,7 @@ fn products() {
 
 #[test]
 fn transpose() {
-    assert_eq!(paradoc::simple_eval("[[1][2 3 4][5 6]]™"), vec![list(vec![list(intvec![1, 2, 5]), list(intvec![3, 6]), list(intvec![4])])]);
+    assert_eq!(paradoc::simple_eval("[[1][2 3 4][5 6]]™"), vec![lv![liv![1, 2, 5], liv![3, 6], liv![4]]]);
 }
 
 #[test]
@@ -211,17 +220,17 @@ fn hoard() {
 
 #[test]
 fn split() {
-    assert_eq!(paradoc::simple_eval("[1 2 3]2/"), vec![list(vec![list(intvec![1, 2]), list(intvec![3])])]);
-    assert_eq!(paradoc::simple_eval("[1 2 3 4]2/"), vec![list(vec![list(intvec![1, 2]), list(intvec![3, 4])])]);
-    assert_eq!(paradoc::simple_eval("[1 2 3]2÷"), vec![list(vec![list(intvec![1, 2])])]);
-    assert_eq!(paradoc::simple_eval("[1 2 3 4]2÷"), vec![list(vec![list(intvec![1, 2]), list(intvec![3, 4])])]);
-    assert_eq!(paradoc::simple_eval("\"12345\"2/"), vec![list(vec![PdObj::from("12"), PdObj::from("34"), PdObj::from("5")])]);
+    assert_eq!(paradoc::simple_eval("[1 2 3]2/"), vec![lv![liv![1, 2], liv![3]]]);
+    assert_eq!(paradoc::simple_eval("[1 2 3 4]2/"), vec![lv![liv![1, 2], liv![3, 4]]]);
+    assert_eq!(paradoc::simple_eval("[1 2 3]2÷"), vec![lv![liv![1, 2]]]);
+    assert_eq!(paradoc::simple_eval("[1 2 3 4]2÷"), vec![lv![liv![1, 2], liv![3, 4]]]);
+    assert_eq!(paradoc::simple_eval("\"12345\"2/"), vec![lv![PdObj::from("12"), PdObj::from("34"), PdObj::from("5")]]);
 }
 
 #[test]
 fn base_conversion() {
     assert_eq!(paradoc::simple_eval("[2 0 1]3B"), intvec![19]);
     assert_eq!(paradoc::simple_eval("[2m 0 1m]3B"), intvec![-19]);
-    assert_eq!(paradoc::simple_eval("19 3B"), vec![list(intvec![2, 0, 1])]);
-    assert_eq!(paradoc::simple_eval("19m 3B"), vec![list(intvec![-2, 0, -1])]);
+    assert_eq!(paradoc::simple_eval("19 3B"), vec![liv![2, 0, 1]]);
+    assert_eq!(paradoc::simple_eval("19m 3B"), vec![liv![-2, 0, -1]]);
 }

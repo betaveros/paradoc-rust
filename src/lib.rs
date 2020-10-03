@@ -1064,6 +1064,24 @@ fn block_seq_range_case(func: fn(&mut Environment, &Rc<dyn Block>, &PdSeq) -> Pd
     Rc::new(BinaryCase { coerce1: just_block, coerce2: seq_range, func })
 }
 
+struct TernaryCase<T1, T2, T3> {
+    coerce1: fn(&PdObj) -> Option<T1>,
+    coerce2: fn(&PdObj) -> Option<T2>,
+    coerce3: fn(&PdObj) -> Option<T3>,
+    func: fn(&mut Environment, &T1, &T2, &T3) -> PdResult<Vec<PdObj>>,
+}
+impl<T1, T2, T3> Case for TernaryCase<T1, T2, T3> {
+    fn arity(&self) -> usize { 3 }
+    fn maybe_run_noncommutatively(&self, env: &mut Environment, args: &Vec<PdObj>) -> PdResult<Option<Vec<PdObj>>> {
+        match ((self.coerce1)(&args[0]), (self.coerce2)(&args[1]), (self.coerce3)(&args[2])) {
+            (Some(a), Some(b), Some(c)) => {
+                Ok(Some((self.func)(env, &a, &b, &c)?))
+            }
+            _ => Ok(None)
+        }
+    }
+}
+
 struct CasedBuiltIn {
     name: String,
     cases: Vec<Rc<dyn Case>>,
@@ -1278,6 +1296,37 @@ fn pd_map(env: &mut Environment, func: &Rc<dyn Block>, seq: &PdSeq) -> PdResult<
     let mut acc = Vec::new();
     pd_flatmap_foreach(env, func, |o| { acc.push(o); Ok(()) }, seq.iter())?;
     Ok(pd_build_like(bty, acc))
+}
+
+fn pd_flatmap_cartesian_product(env: &mut Environment, func: &Rc<dyn Block>, seq1: &PdSeq, seq2: &PdSeq) -> PdResult<PdObj> {
+    let bty = seq1.build_type() & seq2.build_type();
+    let mut acc = Vec::new();
+    yx_loop(env, seq1.iter(), |env, _, obj1| {
+        yx_loop(env, seq2.iter(), |env, _, obj2| {
+            for e in sandbox(env, &func, vec![PdObj::clone(&obj1), obj2])? {
+                acc.push(e);
+            }
+            Ok(())
+        })
+    })?;
+    Ok(pd_build_like(bty, acc))
+}
+
+fn pd_map_cartesian_product(env: &mut Environment, func: &Rc<dyn Block>, seq1: &PdSeq, seq2: &PdSeq) -> PdResult<PdObj> {
+    let bty = seq2.build_type();
+    let mut acc1 = Vec::new();
+    yx_loop(env, seq1.iter(), |env, _, obj1| {
+        let mut acc = Vec::new();
+        yx_loop(env, seq2.iter(), |env, _, obj2| {
+            for e in sandbox(env, &func, vec![PdObj::clone(&obj1), obj2])? {
+                acc.push(e);
+            }
+            Ok(())
+        })?;
+        acc1.push(pd_build_like(bty, acc));
+        Ok(())
+    })?;
+    Ok(pd_list(acc1))
 }
 
 // generically implementing multizip is not super practical, I think
@@ -2977,8 +3026,7 @@ pub fn initialize(env: &mut Environment) {
         coerce1: seq_range,
         coerce2: seq_range,
         func: |_, seq1: &PdSeq, seq2: &PdSeq| {
-            Ok(vec![pd_list(
-                    seq1.iter().map(|e1| pd_list(seq2.iter().map(|e2| pd_list(vec![PdObj::clone(&e1), e2])).collect())).collect())])
+            Ok(vec![pd_cartesian_product(&vec![seq1, seq2])])
         },
     });
     let flat_cartesian_product_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -2987,6 +3035,24 @@ pub fn initialize(env: &mut Environment) {
         func: |_, seq1: &PdSeq, seq2: &PdSeq| {
             Ok(vec![pd_list(
                     seq1.iter().flat_map(|e1| seq2.iter().map(move |e2| pd_list(vec![PdObj::clone(&e1), e2]))).collect())])
+        },
+    });
+    let map_cartesian_product_case: Rc<dyn Case> = Rc::new(TernaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        coerce3: just_block,
+        func: |env, seq1: &PdSeq, seq2: &PdSeq, block: &Rc<dyn Block>| {
+            // FIXME
+            Ok(vec![pd_map_cartesian_product(env, block, seq1, seq2)?])
+        },
+    });
+    let flatmap_cartesian_product_case: Rc<dyn Case> = Rc::new(TernaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        coerce3: just_block,
+        func: |env, seq1: &PdSeq, seq2: &PdSeq, block: &Rc<dyn Block>| {
+            // FIXME
+            Ok(vec![pd_flatmap_cartesian_product(env, block, seq1, seq2)?])
         },
     });
     let square_cartesian_product_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -3315,7 +3381,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
     add_cases("¯", cc![antiminus_case, anti_set_difference_case]);
     add_cases("*", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case]);
-    add_cases("T", cc![cartesian_product_case]);
+    add_cases("T", cc![cartesian_product_case, map_cartesian_product_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
     add_cases("ˆ", cc![pow_case, cartesian_power_case]);
@@ -3367,7 +3433,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("!p", cc![factorial_case, permutations_case]);
     add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("Ss", cc![two_to_the_power_of_case, subsequences_case]);
-    add_cases("B", cc![to_base_digits_case, from_base_digits_case]);
+    add_cases("B", cc![to_base_digits_case, from_base_digits_case, flatmap_cartesian_product_case]);
     add_cases("™", cc![transpose_case]);
     add_cases("Tt", cc![transpose_case]);
     add_cases(" r", cc![space_join_case]);
