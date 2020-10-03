@@ -86,7 +86,7 @@ fn each() {
 fn stack_manip() {
     assert_eq!(paradoc::simple_eval("3 4:" ), intvec![3, 4, 4]);
     assert_eq!(paradoc::simple_eval("3 4:p"), intvec![3, 4, 3, 4]);
-    assert_eq!(paradoc::simple_eval("3 4:a"), intvec![3, 4, 3]);
+    assert_eq!(paradoc::simple_eval("3 4:o"), intvec![3, 4, 3]);
     assert_eq!(paradoc::simple_eval("3 4\\"), intvec![4, 3]);
 
     assert_eq!(paradoc::simple_eval("3 4 5\\o"), intvec![4, 5, 3]);
@@ -233,4 +233,22 @@ fn base_conversion() {
     assert_eq!(paradoc::simple_eval("[2m 0 1m]3B"), intvec![-19]);
     assert_eq!(paradoc::simple_eval("19 3B"), vec![liv![2, 0, 1]]);
     assert_eq!(paradoc::simple_eval("19m 3B"), vec![liv![-2, 0, -1]]);
+}
+
+#[test]
+fn type_predicates() {
+    assert_eq!(paradoc::simple_eval("[2 0 1]3B"), intvec![19]);
+    assert_eq!(
+        paradoc::simple_eval("[1 1.0 '1 \"1\" [1] {1} H][:i_:f_:c_:n_:s_:a_:b_:h_],y"),
+        vec![lv![
+            liv![0],
+            liv![1],
+            liv![2],
+            liv![0,1,2],
+            liv![3],
+            liv![4],
+            liv![5],
+            liv![6]
+        ]]
+    )
 }

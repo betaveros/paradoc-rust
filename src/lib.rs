@@ -3509,7 +3509,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases(":",   vec![juggle!(a -> a, a)]);
     add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);
     add_cases("¦",   vec![juggle!(a, b -> a, b, a, b)]);
-    add_cases(":a",  vec![juggle!(a, b -> a, b, a)]);
+    add_cases(":o",  vec![juggle!(a, b -> a, b, a)]);
     add_cases("\\",  vec![juggle!(a, b -> b, a)]);
     add_cases("\\a", vec![juggle!(a, b, c -> c, b, a)]);
     add_cases("\\i", vec![juggle!(a, b, c -> c, a, b)]);
@@ -3520,6 +3520,56 @@ pub fn initialize(env: &mut Environment) {
     add_cases(";p",  vec![juggle!(_a, _b, c -> c)]);
     add_cases(";a",  vec![juggle!(_a, b, _c -> b)]);
     add_cases("¸",   vec![juggle!(_a, b -> b)]);
+
+    let is_int_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::Num(x) => match &**x {
+            PdNum::Int(_) => true,
+            _ => false,
+        }
+        _ => false,
+    })])});
+    let is_float_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::Num(x) => match &**x {
+            PdNum::Float(_) => true,
+            _ => false,
+        }
+        _ => false,
+    })])});
+    let is_char_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::Num(x) => match &**x {
+            PdNum::Char(_) => true,
+            _ => false,
+        }
+        _ => false,
+    })])});
+    let is_num_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::Num(_) => true,
+        _ => false,
+    })])});
+    let is_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::String(_) => true,
+        _ => false,
+    })])});
+    let is_array_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::List(_) => true,
+        _ => false,
+    })])});
+    let is_block_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::Block(_) => true,
+        _ => false,
+    })])});
+    let is_hoard_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
+        PdObj::Hoard(_) => true,
+        _ => false,
+    })])});
+    add_cases(":i", cc![is_int_case]);
+    add_cases(":f", cc![is_float_case]);
+    add_cases(":c", cc![is_char_case]);
+    add_cases(":n", cc![is_num_case]);
+    add_cases(":s", cc![is_string_case]);
+    add_cases(":a", cc![is_array_case]);
+    add_cases(":b", cc![is_block_case]);
+    add_cases(":h", cc![is_hoard_case]);
 
     let pop_if_true_case:  Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![] } else { vec![PdObj::clone(a)] })]) });
     let pop_if_false_case: Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![PdObj::clone(a)] } else { vec![] })]) });
