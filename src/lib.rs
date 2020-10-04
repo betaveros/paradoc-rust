@@ -780,9 +780,9 @@ impl PdSeq {
 
     fn to_rc_pd_obj(self) -> PdObj {
         match self {
-            PdSeq::List(rc) => (PdObj::List(rc)),
-            PdSeq::String(s) => (PdObj::String(s)),
-            PdSeq::Range(_, _) => (PdObj::List(Rc::new(self.to_new_vec()))),
+            PdSeq::List(rc) => PdObj::List(rc),
+            PdSeq::String(s) => PdObj::String(s),
+            PdSeq::Range(_, _) => PdObj::List(Rc::new(self.to_new_vec())),
             // PdSeq::Range(a, b) => num_iter::range(BigInt::clone(a), BigInt::clone(b)).map(|x| (PdObj::from(x))).collect(),
         }
     }
@@ -964,22 +964,26 @@ impl PdSeq {
         }
     }
 
-    fn split_first(&self) -> Option<(PdObj, PdObj)> {
+    fn split_first_seq(&self) -> Option<(PdObj, PdSeq)> {
         match self {
             PdSeq::List(v) => {
                 let (x, xs) = v.split_first()?;
-                Some((PdObj::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), PdSeq::List(Rc::new(xs.to_vec()))))
             }
             PdSeq::String(s) => {
                 let (x, xs) = s.split_first()?;
-                Some(((PdObj::from(*x)), (PdObj::String(Rc::new(xs.to_vec())))))
+                Some((PdObj::from(*x), PdSeq::String(Rc::new(xs.to_vec()))))
             }
             PdSeq::Range(_, _) => {
                 let v = self.to_new_vec();
                 let (x, xs) = v.split_first()?;
-                Some((PdObj::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), PdSeq::List(Rc::new(xs.to_vec()))))
             }
         }
+    }
+
+    fn split_first(&self) -> Option<(PdObj, PdObj)> {
+        self.split_first_seq().map(|(x, xs)| (x, xs.to_rc_pd_obj()))
     }
 
     fn last(&self) -> Option<PdSeqElement> {
@@ -990,22 +994,26 @@ impl PdSeq {
         }
     }
 
-    fn split_last(&self) -> Option<(PdObj, PdObj)> {
+    fn split_last_seq(&self) -> Option<(PdObj, PdSeq)> {
         match self {
             PdSeq::List(v) => {
                 let (x, xs) = v.split_last()?;
-                Some((PdObj::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), PdSeq::List(Rc::new(xs.to_vec()))))
             }
             PdSeq::String(s) => {
                 let (x, xs) = s.split_last()?;
-                Some((PdObj::from(*x), (PdObj::String(Rc::new(xs.to_vec())))))
+                Some((PdObj::from(*x), PdSeq::String(Rc::new(xs.to_vec()))))
             }
             PdSeq::Range(_, _) => {
                 let v = self.to_new_vec();
                 let (x, xs) = v.split_last()?;
-                Some((PdObj::clone(x), pd_list(xs.to_vec())))
+                Some((PdObj::clone(x), PdSeq::List(Rc::new(xs.to_vec()))))
             }
         }
+    }
+
+    fn split_last(&self) -> Option<(PdObj, PdObj)> {
+        self.split_last_seq().map(|(x, xs)| (x, xs.to_rc_pd_obj()))
     }
 }
 
@@ -2811,6 +2819,12 @@ pub fn initialize(env: &mut Environment) {
         let (x, xs) = a.split_first().ok_or(PdError::BadList("Uncons of empty list"))?;
         Ok(vec![xs, x])
     });
+    let modify_first_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        let (x, xs) = seq.split_first_seq().ok_or(PdError::BadList("Modify first of empty list"))?;
+        let mut modified = sandbox(env, block, vec![x])?;
+        modified.extend(xs);
+        Ok(vec![pd_build_like(seq.build_type(), modified)])
+    });
     let hoard_first_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_hoard,
         func: |_, hoard| { Ok(vec![PdObj::clone(hoard.borrow().first().ok_or(PdError::BadList("first of empty hoard"))?)]) },
@@ -2825,6 +2839,13 @@ pub fn initialize(env: &mut Environment) {
     let unsnoc_case = unary_seq_range_case(|_, a| {
         let (x, xs) = a.split_last().ok_or(PdError::BadList("Unsnoc of empty list"))?;
         Ok(vec![xs, x])
+    });
+    let modify_last_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        let (x, xs) = seq.split_last_seq().ok_or(PdError::BadList("Modify first of empty list"))?;
+        let mut acc = xs.to_new_vec();
+        let modified = sandbox(env, block, vec![x])?;
+        acc.extend(modified);
+        Ok(vec![pd_build_like(seq.build_type(), acc)])
     });
     let last_case = unary_seq_range_case(|_, a| { Ok(vec![a.last().ok_or(PdError::BadList("Last of empty list"))?.to_rc_pd_obj() ]) });
     let butlast_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_last().ok_or(PdError::BadList("Butlast of empty list"))?.1]) });
@@ -3494,8 +3515,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases("If", cc![just_if_case]);
     add_cases("Ul", cc![just_unless_case]);
     add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
-    add_cases("(", cc![dec_case, uncons_case]);
-    add_cases(")", cc![inc_case, unsnoc_case]);
+    add_cases("(", cc![dec_case, uncons_case, modify_first_case]);
+    add_cases(")", cc![inc_case, unsnoc_case, modify_last_case]);
     add_cases("=", cc![index_hoard_case, eq_case, index_case, find_case]);
     add_cases("@", cc![find_index_str_str_case, find_index_equal_case, find_index_case]);
     add_cases("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
