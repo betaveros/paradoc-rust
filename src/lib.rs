@@ -16,7 +16,9 @@ use num_traits::identities::Zero;
 use std::collections::{HashSet, HashMap};
 use std::cell::RefCell;
 use std::iter::FromIterator;
+use std::io::Cursor;
 use rand;
+use wasm_bindgen::prelude::*;
 
 mod lex;
 mod pdnum;
@@ -43,6 +45,10 @@ pub struct TopEnvironment {
     variables: HashMap<String, PdObj>,
     input_trigger: Option<InputTrigger>,
     reader: Option<EOFReader>,
+
+    // None if running as an executable; a String that accumulates outputs/error messages if not
+    output_buffer: Option<String>,
+    error_buffer: Option<String>,
 }
 
 #[derive(Debug)]
@@ -112,6 +118,46 @@ impl Environment {
                 }
                 _ => None
             }
+        }
+    }
+
+    fn print(&mut self, msg: &str) {
+        match &mut self.shadow {
+            Ok(inner) => inner.env.print(msg),
+            Err(top) => match &mut top.output_buffer {
+                Some(buf) => buf.push_str(&msg),
+                None => print!("{}", msg),
+            }
+        }
+    }
+
+    fn println(&mut self, msg: &str) {
+        match &mut self.shadow {
+            Ok(inner) => inner.env.print(msg),
+            Err(top) => match &mut top.output_buffer {
+                Some(buf) => {
+                    buf.push_str(&msg);
+                    buf.push('\n')
+                },
+                None => println!("{}", msg),
+            }
+        }
+    }
+
+    fn print_error(&mut self, msg: &str) {
+        match &mut self.shadow {
+            Ok(inner) => inner.env.print_error(msg),
+            Err(top) => match &mut top.error_buffer {
+                Some(buf) => buf.push_str(msg),
+                None => eprint!("{}", msg),
+            }
+        }
+    }
+
+    fn get_output_buffers(&self) -> (Option<&String>, Option<&String>) {
+        match &self.shadow {
+            Ok(inner) => inner.env.get_output_buffers(),
+            Err(top) => (top.output_buffer.as_ref(), top.error_buffer.as_ref()),
         }
     }
 
@@ -301,7 +347,7 @@ impl Environment {
         }
     }
 
-    pub fn new_with_stdin() -> Environment {
+    pub fn new_with_stdio() -> Environment {
         Environment {
             stack: Vec::new(),
             marker_stack: Vec::new(),
@@ -310,11 +356,13 @@ impl Environment {
                 variables: HashMap::new(),
                 input_trigger: None,
                 reader: Some(EOFReader::new(Box::new(std::io::BufReader::new(std::io::stdin())))),
+                output_buffer: None,
+                error_buffer: None,
             }),
         }
     }
 
-    pub fn new() -> Environment {
+    pub fn new_encapsulated() -> Environment {
         Environment {
             stack: Vec::new(),
             marker_stack: Vec::new(),
@@ -323,6 +371,23 @@ impl Environment {
                 variables: HashMap::new(),
                 input_trigger: None,
                 reader: None,
+                output_buffer: Some(String::new()),
+                error_buffer: Some(String::new()),
+            }),
+        }
+    }
+
+    pub fn new_with_input(input: String) -> Environment {
+        Environment {
+            stack: Vec::new(),
+            marker_stack: Vec::new(),
+            shadow: Err(TopEnvironment {
+                x_stack: Vec::new(),
+                variables: HashMap::new(),
+                input_trigger: None,
+                reader: Some(EOFReader::new(Box::new(Cursor::new(input)))),
+                output_buffer: Some(String::new()),
+                error_buffer: Some(String::new()),
             }),
         }
     }
@@ -360,7 +425,7 @@ impl Environment {
     }
 
     fn run_on_bracketed_shadow_with_arity<T>(&mut self, shadow_type: ShadowType, body: impl FnOnce(&mut Environment) -> Result<T, PdError>) -> Result<(T, usize), PdError> {
-        let env = mem::replace(self, Environment::new());
+        let env = mem::replace(self, Environment::new_encapsulated());
 
         let mut benv = Environment {
             stack: Vec::new(),
@@ -1767,11 +1832,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 Ok(())
             }),
             "o" | "interoutput" => stb("interoutput", s, |env, string| {
-                print!("{}", simple_interpolate::<String>(env, string)?);
+                let msg = simple_interpolate::<String>(env, string)?;
+                env.print(&msg);
                 Ok(())
             }),
             "p" | "interprint" => stb("interprint", s, |env, string| {
-                println!("{}", simple_interpolate::<String>(env, string)?);
+                let msg = simple_interpolate::<String>(env, string)?;
+                env.println(&msg);
                 Ok(())
             }),
             _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
@@ -3791,8 +3858,8 @@ pub fn initialize(env: &mut Environment) {
                 Ok(())
             } else {
                 failures.reverse();
-                let msg = format!("Stack check failed!\n{}", failures.join("\n"));
-                println!("{}", msg);
+                let msg = format!("Stack check failed!\n{}\n", failures.join("\n"));
+                env.print_error(&msg);
                 Err(PdError::AssertError(msg))
             }
         },
@@ -3811,7 +3878,7 @@ pub fn initialize(env: &mut Environment) {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_result("O failed")?;
-            print!("{}", env.to_string(&obj));
+            env.print(&env.to_string(&obj));
             Ok(())
         },
     });
@@ -3819,7 +3886,7 @@ pub fn initialize(env: &mut Environment) {
         name: "Print".to_string(),
         func: |env| {
             let obj = env.pop_result("P failed")?;
-            println!("{}", env.to_string(&obj));
+            env.println(&env.to_string(&obj));
             Ok(())
         },
     });
@@ -3975,7 +4042,7 @@ pub fn initialize(env: &mut Environment) {
 }
 
 pub fn simple_eval(code: &str) -> Vec<PdObj> {
-    let mut env = Environment::new();
+    let mut env = Environment::new_encapsulated();
     initialize(&mut env);
 
     let block = CodeBlock::parse(code);
@@ -3986,4 +4053,40 @@ pub fn simple_eval(code: &str) -> Vec<PdObj> {
     }
 
     env.stack
+}
+
+#[wasm_bindgen]
+pub struct WasmOutputs {
+    output: String,
+    error: String,
+}
+
+#[wasm_bindgen]
+impl WasmOutputs {
+    pub fn get_output(&self) -> String { self.output.to_string() }
+    pub fn get_error(&self) -> String { self.error.to_string() }
+}
+
+// stdout and error
+#[wasm_bindgen]
+pub fn encapsulated_eval(code: &str, input: &str) -> WasmOutputs {
+    let mut env = Environment::new_with_input(input.to_string());
+    initialize(&mut env);
+
+    let block = CodeBlock::parse(code);
+
+    let end_error = match block.run(&mut env) {
+        Ok(()) => String::new(),
+        Err(e) => format!("{:?}\n", e),
+    };
+
+    let (out, err) = match env.get_output_buffers() {
+        (Some(a), Some(b)) => (a, b),
+        _ => panic!("encapsulated eval needs buffers"),
+    };
+
+    WasmOutputs {
+        output: format!("{}{}", out, env.stack_to_string()),
+        error: format!("{}{}", err, end_error),
+    }
 }

@@ -13,3 +13,7 @@ regex = "1"
 num-traits = "0.2"
 lazy_static = "1.4.0"
 rand = "0.7"
+wasm-bindgen = "0.2"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
