@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::io::Cursor;
 use rand;
+#[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
 mod lex;
@@ -4076,20 +4077,20 @@ pub fn simple_eval(code: &str) -> Vec<PdObj> {
     env.stack
 }
 
-#[wasm_bindgen]
+#[cfg_attr(target_arch="wasm32", wasm_bindgen)]
 pub struct WasmOutputs {
     output: String,
     error: String,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(target_arch="wasm32", wasm_bindgen)]
 impl WasmOutputs {
     pub fn get_output(&self) -> String { self.output.to_string() }
     pub fn get_error(&self) -> String { self.error.to_string() }
 }
 
 // stdout and error
-#[wasm_bindgen]
+#[cfg_attr(target_arch="wasm32", wasm_bindgen)]
 pub fn encapsulated_eval(code: &str, input: &str) -> WasmOutputs {
     let mut env = Environment::new_with_input(input.to_string());
     initialize(&mut env);
