@@ -397,10 +397,14 @@ impl Environment {
         match obj {
             PdObj::Num(n) => n.to_string(),
             PdObj::String(s) => s.iter().collect::<String>(),
-            PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
-            PdObj::Hoard(h) => h.borrow().iter().map(|o| self.to_string(o)).collect::<Vec<String>>().join(""),
+            PdObj::List(v) => v.iter().map(|o| self.to_string(o)).collect::<String>(),
+            PdObj::Hoard(h) => h.borrow().iter().map(|o| self.to_string(o)).collect::<String>(),
             PdObj::Block(b) => b.code_repr(),
         }
+    }
+
+    fn seq_to_string(&self, obj: &PdSeq) -> String {
+        obj.iter().map(|x| self.to_string(&x)).collect::<String>()
     }
 
     fn to_repr_string(&self, obj: &PdObj) -> String {
@@ -1065,6 +1069,15 @@ fn list_singleton(obj: &PdObj) -> Option<Rc<Vec<PdObj>>> {
         PdObj::Num(n) => Some(Rc::new(vec![(PdObj::from(PdNum::clone(&**n)))])),
         PdObj::List(x) => Some(Rc::clone(x)),
         _ => None,
+    }
+}
+fn seq_singleton(obj: &PdObj) -> Option<PdSeq> {
+    match obj {
+        PdObj::Num(n) => match &**n {
+            PdNum::Char(c) => Some(PdSeq::String(Rc::new(vec![std::char::from_u32(c.to_u32()?)?]))),
+            _ => Some(PdSeq::List(Rc::new(vec![PdObj::clone(obj)]))),
+        }
+        _ => just_seq(obj),
     }
 }
 fn seq_range(obj: &PdObj) -> Option<PdSeq> {
@@ -3438,6 +3451,41 @@ pub fn initialize(env: &mut Environment) {
         Ok(vec![pd_organize_by(seq, pd_key_projector(env, block))?])
     });
 
+    let join_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_singleton,
+        coerce2: seq_singleton,
+        func: |env, seq1: &PdSeq, seq2: &PdSeq| {
+            match (seq1, seq2) {
+                (PdSeq::String(_), _) | (_, PdSeq::String(_)) => {
+                    Ok(vec![
+                       PdObj::from(
+                           seq1.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(&env.seq_to_string(seq2))
+                       )
+                    ])
+                }
+                _ => {
+                    let mut v: Vec<PdObj> = Vec::new();
+                    let mut started = false;
+                    for e in seq1.iter() {
+                        if started {
+                            v.extend(seq2.iter());
+                        }
+                        started = true;
+                        match just_seq(&e) {
+                            Some(inner) => v.extend(inner.iter()),
+                            None => v.push(e),
+                        }
+                    }
+                    Ok(vec![pd_list(v)])
+                }
+            }
+
+        },
+    });
+    let reduce_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
+        Ok(vec![pd_reduce(env, block, seq.iter())?])
+    });
+
     let sort_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
         func: |_, seq| {
@@ -3572,6 +3620,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("To", cc![to_range_case]);
     add_cases("Tl", cc![til_range_case]);
 
+    add_cases("R", cc![join_case, reduce_case]);
     add_cases("G", cc![group_case, gcd_case, group_by_case]);
     add_cases("Ø", cc![organize_case, organize_by_case]);
     add_cases("$", cc![index_stack_case, sort_case, sort_by_case]);

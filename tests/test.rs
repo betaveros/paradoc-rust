@@ -228,6 +228,23 @@ fn split() {
 }
 
 #[test]
+fn join() {
+    assert_eq!(paradoc::simple_eval(r#""abc""."R"#), vec![PdObj::from("a.b.c")]);
+    assert_eq!(paradoc::simple_eval(r#"["ab" "cd" "ef"]","R"#), vec![PdObj::from("ab,cd,ef")]);
+    assert_eq!(paradoc::simple_eval(r#"[2 5 3]0R"#), vec![liv![2, 0, 5, 0, 3]]);
+    assert_eq!(paradoc::simple_eval(r#"[24 60 1]","R"#), vec![PdObj::from("24,60,1")]);
+    assert_eq!(paradoc::simple_eval(r#"[24 60 1]',R"#), vec![PdObj::from("24,60,1")]);
+}
+
+#[test]
+fn reduce() {
+    assert_eq!(paradoc::simple_eval(r"10,{+}R"), vec![int(45)]);
+    assert_eq!(paradoc::simple_eval(r"[2 5 3]{+}R"), vec![int(10)]);
+    assert_eq!(paradoc::simple_eval(r"10,+r"), vec![int(45)]);
+    assert_eq!(paradoc::simple_eval(r"[5 17 20]|r"), vec![int(21)]);
+}
+
+#[test]
 fn base_conversion() {
     assert_eq!(paradoc::simple_eval("[2 0 1]3B"), intvec![19]);
     assert_eq!(paradoc::simple_eval("[2m 0 1m]3B"), intvec![-19]);

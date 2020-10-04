@@ -26,11 +26,11 @@ impl fmt::Display for PdNum {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PdNum::Int(n) => write!(formatter, "{}", n),
-            PdNum::Float(f) => write!(formatter, "{}f", f),
+            PdNum::Float(f) => write!(formatter, "{}", f),
             // TODO as above
             PdNum::Char(c)  => match c.to_u32().and_then(std::char::from_u32) {
-                Some(ch) => write!(formatter, "'{}", ch),
-                None => write!(formatter, "Char({})", c),
+                Some(ch) => write!(formatter, "{}", ch),
+                None => write!(formatter, "\\{}", c),
             }
         }
     }
