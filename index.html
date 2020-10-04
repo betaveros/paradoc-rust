@@ -1,0 +1,62 @@
+<html>
+<head>
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type"/>
+<style>
+body {
+	font-family: sans-serif;
+}
+textarea {
+	width: 100%;
+	font-family: monospace;
+}
+#output, #error {
+	background-color: #f8f8f8;
+	border: 1px solid #ddd;
+	padding: 0.5em;
+	font-family: monospace;
+	white-space: pre-wrap;
+}
+#error {
+	color: #c00;
+}
+</style>
+</head>
+<body>
+<h1>paradoc-rust</h1>
+<p>
+You can read the <a href="https://betaveros.github.io/paradoc/">Paradoc documentation</a>. This is a separate, less complete implementation (in Rust, via WASM) that doesn't directly share any code and likely has incompatibilities, but many basic built-ins should be the same.
+</p>
+<p>Code:</p>
+<textarea id="code"></textarea>
+<p>Input:</p>
+<textarea id="input"></textarea>
+<button id="run" type="button" role="button" disabled>Loading...</button>
+<p>Output:</p>
+<div id="output"></div>
+<p>Error:</p>
+<div id="error"></div>
+
+<script type="module">
+// https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html (???)
+// wasm-pack build --target web
+import init, { encapsulated_eval } from './pkg/paradoc.js';
+
+async function prepare() {
+	await init();
+	const code = document.getElementById('code');
+	const input = document.getElementById('input');
+	const output = document.getElementById('output');
+	const error = document.getElementById('error');
+	const runner = document.getElementById('run');
+	runner.addEventListener('click', function() {
+		const outs = encapsulated_eval(code.value, input.value);
+		output.textContent = outs.get_output();
+		error.textContent = outs.get_error();
+	});
+	runner.disabled = false;
+	runner.textContent = "Run!";
+}
+prepare();
+</script>
+</body>
+</html>
