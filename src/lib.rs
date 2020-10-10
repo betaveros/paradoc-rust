@@ -1472,6 +1472,17 @@ fn pd_zip(env: &mut Environment, func: &Rc<dyn Block>, seq1: &PdSeq, seq2: &PdSe
     ret.map(|()| pd_build_like(bty, acc))
 }
 
+fn pd_zip_as_list(seq1: &PdSeq, seq2: &PdSeq) -> PdObj {
+    let bty = seq1.build_type() & seq2.build_type();
+    let mut acc: Vec<PdObj> = Vec::new();
+
+    for (obj1, obj2) in seq1.iter().zip(seq2.iter()) {
+        acc.push(pd_build_like(bty, vec![PdObj::clone(&obj1), PdObj::clone(&obj2)]))
+    }
+
+    pd_list(acc)
+}
+
 fn pd_reduce(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter) -> PdResult<PdObj> {
     let mut acc: Option<PdObj> = None;
 
@@ -2773,6 +2784,12 @@ pub fn initialize(env: &mut Environment) {
     let intdiv_case = nn_n![a, b, a.div_floor(b)];
     let pow_case = nn_n![a, b, a.pow_num(b)];
 
+    let divmod_case = binary_num_case(|_, a0, b0| {
+        let a: &PdNum = &**a0;
+        let b: &PdNum = &**b0;
+        Ok(vec![PdObj::from(a / b), PdObj::from(a % b)])
+    });
+
     let bitand_case = nn_n![a, b, a & b];
     let bitor_case  = nn_n![a, b, a | b];
     let bitxor_case = nn_n![a, b, a ^ b];
@@ -2879,6 +2896,22 @@ pub fn initialize(env: &mut Environment) {
     let map_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         Ok(vec![pd_map(env, a, b)?])
     });
+    let zip_as_list_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        func: |_, seq1: &PdSeq, seq2: &PdSeq| {
+            Ok(vec![pd_zip_as_list(seq1, seq2)])
+        },
+    });
+    let zip_with_block_case: Rc<dyn Case> = Rc::new(TernaryCase {
+        coerce1: seq_range,
+        coerce2: seq_range,
+        coerce3: just_block,
+        func: |env, seq1: &PdSeq, seq2: &PdSeq, block: &Rc<dyn Block>| {
+            Ok(vec![pd_zip(env, block, seq1, seq2)?])
+        },
+    });
+
     let xloop_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         pd_xloop(env, a, b.iter())?; Ok(vec![])
     });
@@ -3576,6 +3609,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("T", cc![cartesian_product_case, map_cartesian_product_case]);
     add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
     add_cases("%", cc![mod_case, mod_slice_case, map_case]);
+    add_cases("‰", cc![divmod_case, zip_as_list_case, zip_with_block_case]);
     add_cases("ˆ", cc![pow_case, cartesian_power_case]);
     add_cases("*p", cc![pow_case, cartesian_power_case]);
     add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
