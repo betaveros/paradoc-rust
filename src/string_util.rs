@@ -37,6 +37,10 @@ pub fn str_class(s: &str) -> String {
     ret
 }
 
+pub fn case_double(s: &str) -> String {
+    format!("{}{}", s.to_uppercase(), s.to_lowercase())
+}
+
 pub fn int_groups(text: &str) -> impl Iterator<Item=BigInt> + '_ {
     lazy_static! {
         static ref INT_PATTERN: Regex = Regex::new(r#"-?\d+"#).unwrap();

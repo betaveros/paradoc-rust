@@ -34,7 +34,7 @@ mod base;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
-use crate::string_util::{str_class, int_groups, float_groups, flat_collect_strs};
+use crate::string_util::{str_class, case_double, int_groups, float_groups, flat_collect_strs};
 use crate::vec_util as vu;
 use crate::hoard::{Hoard, HoardKey};
 use crate::lex::AssignType;
@@ -3838,8 +3838,8 @@ pub fn initialize(env: &mut Environment) {
 
     env.insert_builtin("Å", str_class("A-Z"));
     env.insert_builtin("Åa", str_class("a-zA-Z"));
-    // env.insert_builtin("Åb", case_double("BCDFGHJKLMNPQRSTVWXZ"));
-    // env.insert_builtin("Åc", case_double("BCDFGHJKLMNPQRSTVWXYZ"));
+    env.insert_builtin("Åb", case_double("BCDFGHJKLMNPQRSTVWXZ"));
+    env.insert_builtin("Åc", case_double("BCDFGHJKLMNPQRSTVWXYZ"));
     env.insert_builtin("Åd", str_class("9-0"));
     env.insert_builtin("Åf", str_class("A-Za-z0-9+/"));
     env.insert_builtin("Åh", str_class("0-9A-F"));
@@ -3848,13 +3848,13 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("Ål", str_class("z-a"));
     env.insert_builtin("Åm", "()<>[]{}");
     env.insert_builtin("Åp", str_class(" -~"));
-    // env.insert_builtin("Åq", case_double("QWERTYUIOP"));
-    // env.insert_builtin("Ås", case_double("ASDFGHJKL"));
+    env.insert_builtin("Åq", case_double("QWERTYUIOP"));
+    env.insert_builtin("Ås", case_double("ASDFGHJKL"));
     env.insert_builtin("Åt", str_class("0-9A-Z"));
     env.insert_builtin("Åu", str_class("Z-A"));
-    // env.insert_builtin("Åv", case_double("AEIOU"));
-    // env.insert_builtin("Åx", case_double("ZXCVBNM"));
-    // env.insert_builtin("Åy", case_double("AEIOUY"));
+    env.insert_builtin("Åv", case_double("AEIOU"));
+    env.insert_builtin("Åx", case_double("ZXCVBNM"));
+    env.insert_builtin("Åy", case_double("AEIOUY"));
     env.insert_builtin("Åz", str_class("z-aZ-A"));
 
     env.insert_builtin(" ", BuiltIn {
