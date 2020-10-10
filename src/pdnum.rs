@@ -12,6 +12,7 @@ use num::bigint::ToBigInt;
 use num_traits::pow::Pow;
 use num_traits::sign::Signed;
 use num_traits::cast::ToPrimitive;
+use num_traits::identities::{Zero, One};
 
 use crate::gamma;
 
@@ -61,8 +62,8 @@ fn pow_big_ints(a: &BigInt, b: &BigInt) -> PdNum {
 }
 
 fn factorial_big_int(a: &BigInt) -> BigInt {
-    let mut ret = BigInt::from(1);
-    for i in num_iter::range_inclusive(BigInt::from(1), BigInt::clone(a)) {
+    let mut ret = BigInt::one();
+    for i in num_iter::range_inclusive(BigInt::one(), BigInt::clone(a)) {
         ret *= i;
     }
     ret
@@ -164,9 +165,9 @@ impl PdNum {
 
     pub fn is_nonzero(&self) -> bool {
         match self {
-            PdNum::Int(i) => *i != BigInt::from(0),
+            PdNum::Int(i) => !i.is_zero(),
             PdNum::Float(f) => *f != 0.0,
-            PdNum::Char(c) => *c != BigInt::from(0),
+            PdNum::Char(c) => !c.is_zero(),
         }
     }
 
@@ -247,13 +248,13 @@ impl PdNum {
     pub fn to_clamped_usize(&self) -> usize {
         match self {
             PdNum::Int(n) => {
-                if n <= &BigInt::from(0) { 0usize } else { n.to_usize().unwrap_or(usize::MAX) }
+                if !n.is_positive() { 0usize } else { n.to_usize().unwrap_or(usize::MAX) }
             }
             PdNum::Float(f) => {
                 if *f <= 0.0 || f.is_nan() { 0usize } else { f.trunc().to_usize().unwrap_or(usize::MAX) }
             }
             PdNum::Char(c) => {
-                if c <= &BigInt::from(0) { 0usize } else { c.to_usize().unwrap_or(usize::MAX) }
+                if !c.is_positive() { 0usize } else { c.to_usize().unwrap_or(usize::MAX) }
             }
         }
     }
@@ -533,20 +534,20 @@ impl Neg for &PdNum {
 
 impl AddAssign<&PdNum> for PdNum {
     fn add_assign(&mut self, other: &PdNum) {
-        let n = mem::replace(self, PdNum::Int(BigInt::from(0)));
+        let n = mem::replace(self, PdNum::from(0));
         *self = &n + other;
     }
 }
 
 impl Sum for PdNum {
     fn sum<I: Iterator<Item=Self>>(iter: I) -> Self {
-        iter.fold(PdNum::Int(BigInt::from(0)), Add::add)
+        iter.fold(PdNum::from(0), Add::add)
     }
 }
 
 impl Product for PdNum {
     fn product<I: Iterator<Item=Self>>(iter: I) -> Self {
-        iter.fold(PdNum::Int(BigInt::from(1)), Mul::mul)
+        iter.fold(PdNum::from(1), Mul::mul)
     }
 }
 

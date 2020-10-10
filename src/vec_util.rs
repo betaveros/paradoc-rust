@@ -3,6 +3,8 @@ use std::hash::Hash;
 use std::collections::{HashSet, HashMap};
 use std::mem;
 
+// I never remember how to do this ._. Also to make "clone" appear when browsing the code
+pub fn replicate_clones<T: Clone>(n: usize, t: &T) -> Vec<T> { vec![t.clone(); n] }
 
 // Generic over I=PdObj and K=PdKey.
 

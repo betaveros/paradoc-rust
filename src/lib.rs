@@ -12,10 +12,9 @@ use num::bigint::BigInt;
 use num::Integer;
 use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
-use num_traits::identities::Zero;
+use num_traits::identities::{Zero, One};
 use std::collections::{HashSet, HashMap};
 use std::cell::RefCell;
-use std::iter::FromIterator;
 use std::io::Cursor;
 use rand;
 #[cfg(target_arch="wasm32")]
@@ -35,7 +34,7 @@ mod base;
 use crate::pdnum::{PdNum, PdTotalNum};
 use crate::pderror::{PdError, PdResult, PdUnit};
 use crate::input::{InputTrigger, ReadValue, EOFReader};
-use crate::string_util::{str_class, int_groups, float_groups};
+use crate::string_util::{str_class, int_groups, float_groups, flat_collect_strs};
 use crate::vec_util as vu;
 use crate::hoard::{Hoard, HoardKey};
 use crate::lex::AssignType;
@@ -1083,7 +1082,7 @@ fn seq_singleton(obj: &PdObj) -> Option<PdSeq> {
 fn seq_range(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::Num(num) => match &**num {
-            PdNum::Int(a) => Some(PdSeq::Range(BigInt::from(0), BigInt::clone(a))),
+            PdNum::Int(a) => Some(PdSeq::Range(BigInt::zero(), BigInt::clone(a))),
             _ => None,
         },
         _ => just_seq(obj),
@@ -1092,7 +1091,7 @@ fn seq_range(obj: &PdObj) -> Option<PdSeq> {
 fn seq_range_one(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::Num(num) => match &**num {
-            PdNum::Int(a) => Some(PdSeq::Range(BigInt::from(1), a + 1)),
+            PdNum::Int(a) => Some(PdSeq::Range(BigInt::one(), a + 1)),
             _ => None,
         },
         _ => just_seq(obj),
@@ -1810,17 +1809,15 @@ fn hb(name: &'static str, h: &Rc<RefCell<PdHoard>>, f: fn(&mut Environment, &Rc<
 }
 
 
-fn simple_interpolate<S>(env: &mut Environment, string: &Vec<char>) -> PdResult<S> where S: FromIterator<char> {
+fn simple_interpolate<S>(env: &mut Environment, string: &Vec<char>) -> PdResult<S> where S: Default + Extend<char> {
     let slot_count = string.iter().filter(|c| **c == '%').count();
     let mut objs = env.pop_n_result(slot_count, "interpolate stack failed")?.into_iter();
-    // somebody needs to own the String while we .chars() it, meh
-    let ss: Vec<String> = string.iter().map(|c| {
+    Ok(flat_collect_strs(string.iter().map(|c| {
         match c {
             '%' => env.to_string(&objs.next().expect("interpolate objs count inconsistent")),
             cc => cc.to_string(),
         }
-    }).collect();
-    Ok(ss.iter().flat_map(|c| c.chars()).collect())
+    })))
 }
 
 fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trailer) -> PdResult<(PdObj, bool)> {
@@ -2748,7 +2745,7 @@ fn pd_mul_div_const(env: &mut Environment, obj: &PdObj, mul: usize, div: usize) 
         }
         PdObj::Block(b) => {
             if div == 1 {
-                pd_xloop(env, b, PdSeq::Range(BigInt::from(0), BigInt::from(mul)).iter())?;
+                pd_xloop(env, b, PdSeq::Range(BigInt::zero(), BigInt::from(mul)).iter())?;
             } else {
                 let threshold = (mul as f64) / (div as f64);
                 if rand::random::<f64>() < threshold {
@@ -3047,13 +3044,13 @@ pub fn initialize(env: &mut Environment) {
     let cycle_left_one_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: seq_range,
         func: |_, seq| {
-            Ok(vec![seq.cycle_left(&BigInt::from(1)).to_rc_pd_obj()])
+            Ok(vec![seq.cycle_left(&BigInt::one()).to_rc_pd_obj()])
         },
     });
     let cycle_right_one_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: seq_range,
         func: |_, seq| {
-            Ok(vec![seq.cycle_right(&BigInt::from(1)).to_rc_pd_obj()])
+            Ok(vec![seq.cycle_right(&BigInt::one()).to_rc_pd_obj()])
         },
     });
     let repeat_seq_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -3230,7 +3227,27 @@ pub fn initialize(env: &mut Environment) {
             // TODO maybe preserve Char/Intiness?
             let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
             let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
-            Ok(vec![pd_list(base::to_base_digits(&base, num).into_iter().map(|x| PdObj::from(x)).collect())])
+            Ok(vec![pd_list(base::to_base_digits(&base, num).ok_or(PdError::BadArgument("from base fail".to_string()))?.into_iter().map(|x| PdObj::from(x)).collect())])
+        },
+    });
+    let to_upper_base_digits_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_num,
+        coerce2: just_num,
+        func: |_, num0, base0| {
+            // TODO maybe preserve Char/Intiness?
+            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
+            let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
+            Ok(vec![PdObj::from(base::to_base_digits_upper::<Vec<char>>(&base, num).ok_or(PdError::BadArgument("from base fail".to_string()))?)])
+        },
+    });
+    let to_lower_base_digits_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_num,
+        coerce2: just_num,
+        func: |_, num0, base0| {
+            // TODO maybe preserve Char/Intiness?
+            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
+            let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
+            Ok(vec![PdObj::from(base::to_base_digits_lower::<Vec<char>>(&base, num).ok_or(PdError::BadArgument("from base fail".to_string()))?)])
         },
     });
     let from_base_digits_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -3240,7 +3257,10 @@ pub fn initialize(env: &mut Environment) {
             // TODO lol
             let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
             let digits = digits0.iter().map(|x| match x {
-                PdObj::Num(num) => num.to_bigint().ok_or(PdError::BadFloat),
+                PdObj::Num(num) => match &*num {
+                    PdNum::Char(ch) => base::from_char_digit(ch).ok_or(PdError::BadArgument(format!("char can't be parsed as digit: {}", num))),
+                    _ => num.to_bigint().ok_or(PdError::BadFloat),
+                },
                 _ => Err(PdError::BadArgument("from base digits type fail".to_string())),
             }).collect::<PdResult<Vec<BigInt>>>()?;
             Ok(vec![PdObj::from(base::from_base_digits(&base, &digits))])
@@ -3355,7 +3375,7 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_num,
         func: |_, num| {
             let n = num.to_bigint().ok_or(PdError::BadFloat)?;
-            let vs = num_iter::range(BigInt::from(0), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            let vs = num_iter::range(BigInt::zero(), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![(PdObj::List(Rc::new(vs)))])
         },
     });
@@ -3363,7 +3383,7 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_num,
         func: |_, num| {
             let n = num.to_bigint().ok_or(PdError::BadFloat)?;
-            let vs = num_iter::range_inclusive(BigInt::from(1), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            let vs = num_iter::range_inclusive(BigInt::zero(), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
     });
@@ -3371,7 +3391,7 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_num,
         func: |_, num| {
             let n = num.to_bigint().ok_or(PdError::BadFloat)?;
-            let vs = num_iter::range_inclusive(BigInt::from(1), n).rev().map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            let vs = num_iter::range_inclusive(BigInt::one(), n).rev().map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
     });
@@ -3426,7 +3446,7 @@ pub fn initialize(env: &mut Environment) {
                 PdObj::Hoard(h) => BigInt::from(h.borrow().len()),
                 PdObj::Block(_) => Err(PdError::BadArgument("range len keep got block".to_string()))?,
             };
-            let vs = num_iter::range(BigInt::from(0), n).map(|x| PdObj::from(x)).collect();
+            let vs = num_iter::range(BigInt::zero(), n).map(|x| PdObj::from(x)).collect();
             Ok(vec![PdObj::clone(obj), PdObj::List(Rc::new(vs))])
         },
     });
@@ -3606,6 +3626,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("Ss", cc![two_to_the_power_of_case, subsequences_case]);
     add_cases("B", cc![to_base_digits_case, from_base_digits_case, flatmap_cartesian_product_case]);
+    add_cases("Ub", cc![to_upper_base_digits_case]);
+    add_cases("Lb", cc![to_lower_base_digits_case]);
     add_cases("™", cc![transpose_case]);
     add_cases("Tt", cc![transpose_case]);
     add_cases(" r", cc![space_join_case]);
@@ -3784,11 +3806,7 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_any,
         coerce2: num_to_clamped_usize,
         func: |_, a, n| {
-            // resize() or vec![_; ] just clones but i don't want that to be silent
-            // idk if this is being paranoid, but we've come this far
-            let mut vec = Vec::new();
-            vec.resize_with(*n, || PdObj::clone(a));
-            Ok(vec![pd_list(vec)])
+            Ok(vec![pd_list(vu::replicate_clones(*n, a))])
         },
     });
     add_cases("°", cc![replicate_case]);

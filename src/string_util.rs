@@ -50,3 +50,18 @@ pub fn float_groups(text: &str) -> impl Iterator<Item=f64> + '_ {
     }
     INT_PATTERN.find_iter(text).map(|m| m.as_str().parse::<f64>().unwrap())
 }
+
+
+// Naively flatmapping with .chars() doesn't work because the Chars is only as alive as the String
+// it's based on (rustc --explain E0515)
+// https://stackoverflow.com/questions/64228432/flatten-iterator-of-strings-to-vecchar-or-even-fromiteratorchar
+pub fn flat_collect_strs<S>(ss: impl Iterator<Item=String>) -> S where S: Default + Extend<char> {
+    // https://stackoverflow.com/questions/47193584/is-there-an-owned-version-of-stringchars
+    // returns S: FromIterator<char> with extra allocation
+    // ss.flat_map(|s| s.chars().collect::<Vec<char>>().into_iter()).collect()
+    let mut acc: S = Default::default();
+    for s in ss {
+        acc.extend(s.chars());
+    }
+    acc
+}
