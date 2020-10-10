@@ -2776,6 +2776,7 @@ fn pd_mul_div_const(env: &mut Environment, obj: &PdObj, mul: usize, div: usize) 
 pub fn initialize(env: &mut Environment) {
     let plus_case = nn_n![a, b, a + b];
     let minus_case = nn_n![a, b, a - b];
+    let clamped_minus_case = nn_n![a, b, (a - b).max_consuming(PdNum::Int(BigInt::from(0)))];
     let antiminus_case = nn_n![a, b, b - a];
     let times_case = nn_n![a, b, a * b];
     // TODO: signs...
@@ -3547,7 +3548,24 @@ pub fn initialize(env: &mut Environment) {
     });
     let sort_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
         Ok(vec![pd_sort_by(seq, pd_key_projector(env, block))?])
-    },);
+    });
+    let order_statistic_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_isize,
+        func: |_, seq, ix| {
+            let sorv = vu::sort_by(seq, pd_key)?;
+            Ok(vec![PdObj::clone(vu::pythonic_index(&sorv, *ix).ok_or(PdError::IndexError("order statistic OOB".to_string()))?)])
+        },
+    });
+    let order_statistic_by_case: Rc<dyn Case> = Rc::new(TernaryCase {
+        coerce1: just_seq,
+        coerce2: num_to_isize,
+        coerce3: just_block,
+        func: |env, seq, ix, block| {
+            let sorv = vu::sort_by(seq, pd_key_projector(env, block))?;
+            Ok(vec![PdObj::clone(vu::pythonic_index(&sorv, *ix).ok_or(PdError::IndexError("order statistic OOB".to_string()))?)])
+        },
+    });
 
     let is_sorted_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_seq,
@@ -3604,6 +3622,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("Cb", cc![cat_between_case]);
     add_cases("Cf", cc![cat_flanking_case]);
     add_cases("-", cc![minus_case, set_difference_case, reject_case]);
+    add_cases("-c", cc![clamped_minus_case]);
     add_cases("¯", cc![antiminus_case, anti_set_difference_case]);
     add_cases("*", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case]);
     add_cases("T", cc![cartesian_product_case, map_cartesian_product_case]);
@@ -3680,6 +3699,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases("G", cc![group_case, gcd_case, group_by_case]);
     add_cases("Ø", cc![organize_case, organize_by_case]);
     add_cases("$", cc![index_stack_case, sort_case, sort_by_case]);
+    add_cases("¢", cc![order_statistic_case, order_statistic_by_case]);
     add_cases("$p", cc![is_sorted_case, is_sorted_by_case]);
     add_cases("<p", cc![is_strictly_increasing_case, is_strictly_increasing_by_case]);
     add_cases(">p", cc![is_strictly_decreasing_case, is_strictly_decreasing_by_case]);

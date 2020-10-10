@@ -446,6 +446,20 @@ impl PdNum {
             _ => other,
         }
     }
+
+    pub fn min_consuming(self, other: Self) -> PdNum {
+        match self.total_cmp_big_nan(&other) {
+            Ordering::Greater => other,
+            _ => self,
+        }
+    }
+
+    pub fn max_consuming(self, other: Self) -> PdNum {
+        match self.total_cmp_small_nan(&other) {
+            Ordering::Greater => self,
+            _ => other,
+        }
+    }
 }
 
 // ????????

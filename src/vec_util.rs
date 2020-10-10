@@ -6,6 +6,14 @@ use std::mem;
 // I never remember how to do this ._. Also to make "clone" appear when browsing the code
 pub fn replicate_clones<T: Clone>(n: usize, t: &T) -> Vec<T> { vec![t.clone(); n] }
 
+pub fn pythonic_index<T>(v: &Vec<T>, i: isize) -> Option<&T> {
+    if 0 <= i {
+        v.get(i as usize)
+    } else {
+        v.get((v.len() as isize + i) as usize)
+    }
+}
+
 // Generic over I=PdObj and K=PdKey.
 
 fn key_counter<I, K: Hash + Eq, E, F>(a: impl IntoIterator<Item=I>, mut proj: F) -> Result<HashMap<K, usize>, E> where F: FnMut(&I) -> Result<K, E> {
