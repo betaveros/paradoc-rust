@@ -322,6 +322,21 @@ impl Environment {
         vars.insert(s, obj.into());
     }
 
+    fn insert_builtin_block(&mut self, primary_name: &str, block: Rc<dyn Block>, aliases: &[&str]) {
+        for alias in aliases {
+            self.insert_builtin(alias, PdObj::Block(Rc::clone(&block)));
+        }
+
+        self.insert_builtin(primary_name, PdObj::Block(block));
+    }
+
+    fn insert_uncased_builtin(&mut self, primary_name: &str, func: fn(&mut Environment) -> PdUnit, aliases: &[&str]) {
+        self.insert_builtin_block(primary_name, Rc::new(BuiltIn {
+            name: primary_name.to_string(),
+            func,
+        }), aliases);
+    }
+
     fn insert_cased_builtin(&mut self, primary_name: &str, cases: Vec<Rc<dyn Case>>, aliases: &[&str]) {
         let mut arity = 0;
         for case in cases.iter() {
@@ -331,16 +346,10 @@ impl Environment {
             arity = case.arity();
         }
 
-        let cb: Rc<dyn Block> = Rc::new(CasedBuiltIn {
+        self.insert_builtin_block(primary_name, Rc::new(CasedBuiltIn {
             name: primary_name.to_string(),
             cases,
-        });
-
-        for alias in aliases {
-            self.insert_builtin(alias, PdObj::Block(Rc::clone(&cb)));
-        }
-
-        self.insert_builtin(primary_name, PdObj::Block(cb));
+        }), aliases);
     }
 
     fn peek_x_stack(&self, depth: usize) -> Option<&PdObj> {
@@ -2940,6 +2949,18 @@ pub fn initialize(env: &mut Environment) {
         };
     }
 
+    macro_rules! add_builtin {
+        ($name:expr, $func:expr) => {
+            env.insert_uncased_builtin($name, $func, &[]);
+        };
+        ($name:expr, $func:expr, alias $alias:literal) => {
+            env.insert_uncased_builtin($name, $func, &vec![$alias]);
+        };
+        ($name:expr, $func:expr, aliases [$($alias:literal),*]) => {
+            env.insert_uncased_builtin($name, $func, &vec![$($alias),*]);
+        };
+    }
+
     let each_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         pd_each(env, a, b.iter())?;
         Ok(vec![])
@@ -4007,171 +4028,117 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("Åy", case_double("AEIOUY"));
     env.insert_builtin("Åz", str_class("z-aZ-A"));
 
-    let nop_builtin: PdObj = PdObj::Block(Rc::new(BuiltIn {
-        name: "Nop".to_string(),
-        func: |_env| Ok(()),
-    }));
-
-    env.insert_builtin("Nop", PdObj::clone(&nop_builtin));
-    env.insert_builtin(" ", PdObj::clone(&nop_builtin));
-    env.insert_builtin("\n", PdObj::clone(&nop_builtin));
-    env.insert_builtin("\r", PdObj::clone(&nop_builtin));
-    env.insert_builtin("\t", PdObj::clone(&nop_builtin));
-    env.insert_builtin("[", BuiltIn {
-        name: "Mark_stack".to_string(),
-        func: |env| { env.mark_stack(); Ok(()) },
-    });
-    env.insert_builtin("]", BuiltIn {
-        name: "Pack".to_string(),
-        func: |env| {
-            let list = env.pop_until_stack_marker();
-            env.push(pd_list(list));
-            Ok(())
-        },
-    });
-    env.insert_builtin("¬", BuiltIn {
-        name: "Pack_reverse".to_string(),
-        func: |env| {
-            let mut list = env.pop_until_stack_marker();
-            list.reverse();
-            env.push(pd_list(list));
-            Ok(())
-        },
-    });
-    env.insert_builtin("]c", BuiltIn {
-        name: "]_case".to_string(),
-        func: |env| {
-            let case_list = env.pop_until_stack_marker();
-            let target = env.pop_result("]_case: no target")?;
-            for case in case_list {
-                match case {
-                    PdObj::List(body) => match body.split_first() {
-                        None => return Err(PdError::BadArgument("]_case: empty case".to_string())),
-                        Some((condition, result)) => {
-                            if sandbox_check_against(env, condition, PdObj::clone(&target))? {
-                                for x in result {
-                                    apply_on(env, PdObj::clone(x))?;
-                                }
-                                break
+    add_builtin!("Nop", |_env| Ok(()), aliases [" ", "\n", "\r", "t"]);
+    add_builtin!("Mark_stack", |env| { env.mark_stack(); Ok(()) }, alias "[");
+    add_builtin!("Pack", |env| {
+        let list = env.pop_until_stack_marker();
+        env.push(pd_list(list));
+        Ok(())
+    }, alias "]");
+    add_builtin!("Pack_reverse", |env| {
+        let mut list = env.pop_until_stack_marker();
+        list.reverse();
+        env.push(pd_list(list));
+        Ok(())
+    }, alias "¬");
+    add_builtin!("]_case", |env| {
+        let case_list = env.pop_until_stack_marker();
+        let target = env.pop_result("]_case: no target")?;
+        for case in case_list {
+            match case {
+                PdObj::List(body) => match body.split_first() {
+                    None => return Err(PdError::BadArgument("]_case: empty case".to_string())),
+                    Some((condition, result)) => {
+                        if sandbox_check_against(env, condition, PdObj::clone(&target))? {
+                            for x in result {
+                                apply_on(env, PdObj::clone(x))?;
                             }
+                            break
                         }
                     }
-                    _ => return Err(PdError::BadArgument("]_case: non-list case".to_string()))
+                }
+                _ => return Err(PdError::BadArgument("]_case: non-list case".to_string()))
+            }
+        }
+        Ok(())
+    }, alias "]c");
+    add_builtin!("]_stream", |env| {
+        let case_list = env.pop_until_stack_marker();
+        let target = env.pop_result("]_stream: no target")?;
+        for case in case_list.chunks_exact(2) {
+            let condition = &case[0];
+            let result = &case[1];
+            if sandbox_check_against(env, &condition, PdObj::clone(&target))? {
+                apply_on(env, PdObj::clone(result))?;
+                break
+            }
+        }
+        Ok(())
+    }, alias "]s");
+    add_builtin!("]_check", |env| {
+        let check_list = env.pop_until_stack_marker();
+        let n = check_list.len();
+        let mut failures = Vec::new();
+        for (i, condition) in check_list.iter().rev().enumerate() {
+            match env.index_stack(i).cloned() {
+                None => {
+                    failures.push(format!("- {} ({} from top) of {}: not enough objects on stack for {}", n - i, i, n, condition))
+                }
+                Some(target) => if !sandbox_check_against(env, condition, PdObj::clone(&target))? {
+                    failures.push(format!("- {} ({} from top) of {}: condition {} not satisfied by target {}", n - i, i, n, condition, target))
                 }
             }
-            Ok(())
-        },
-    });
-    env.insert_builtin("]s", BuiltIn {
-        name: "]_stream".to_string(),
-        func: |env| {
-            let case_list = env.pop_until_stack_marker();
-            let target = env.pop_result("]_stream: no target")?;
-            for case in case_list.chunks_exact(2) {
-                let condition = &case[0];
-                let result = &case[1];
-                if sandbox_check_against(env, &condition, PdObj::clone(&target))? {
-                    apply_on(env, PdObj::clone(result))?;
-                    break
-                }
-            }
-            Ok(())
-        },
-    });
-    env.insert_builtin("]_check", BuiltIn {
-        name: "]_check".to_string(),
-        func: |env| {
-            let check_list = env.pop_until_stack_marker();
-            let n = check_list.len();
-            let mut failures = Vec::new();
-            for (i, condition) in check_list.iter().rev().enumerate() {
-                match env.index_stack(i).cloned() {
-                    None => {
-                        failures.push(format!("- {} ({} from top) of {}: not enough objects on stack for {}", n - i, i, n, condition))
-                    }
-                    Some(target) => if !sandbox_check_against(env, condition, PdObj::clone(&target))? {
-                        failures.push(format!("- {} ({} from top) of {}: condition {} not satisfied by target {}", n - i, i, n, condition, target))
-                    }
-                }
-            }
+        }
 
-            if failures.len() == 0 {
-                Ok(())
-            } else {
-                failures.reverse();
-                let msg = format!("Stack check failed!\n{}\n", failures.join("\n"));
-                env.print_error(&msg);
-                Err(PdError::AssertError(msg))
-            }
-        },
-    });
-    env.insert_builtin("~", BuiltIn {
-        name: "Expand_or_eval".to_string(),
-        func: |env| {
-            match env.pop_result("~ failed")? {
-                PdObj::Block(bb) => bb.run(env),
-                PdObj::List(ls) => { env.extend_clone(&*ls); Ok(()) }
-                _ => Err(PdError::BadArgument("~ can't handle".to_string())),
-            }
-        },
-    });
-    env.insert_builtin("O", BuiltIn {
-        name: "Print".to_string(),
-        func: |env| {
-            let obj = env.pop_result("O failed")?;
-            env.print(&env.to_string(&obj));
+        if failures.len() == 0 {
             Ok(())
-        },
+        } else {
+            failures.reverse();
+            let msg = format!("Stack check failed!\n{}\n", failures.join("\n"));
+            env.print_error(&msg);
+            Err(PdError::AssertError(msg))
+        }
     });
-    env.insert_builtin("P", BuiltIn {
-        name: "Print".to_string(),
-        func: |env| {
-            let obj = env.pop_result("P failed")?;
-            env.println(&env.to_string(&obj));
-            Ok(())
-        },
-    });
-    env.insert_builtin("V", BuiltIn {
-        name: "Input".to_string(),
-        func: |env| {
-            let obj = env.run_stack_trigger().ok_or(PdError::InputError)?;
-            env.push(obj);
-            Ok(())
-        },
-    });
-    env.insert_builtin(" o", BuiltIn {
-        name: "Space_output".to_string(),
-        func: |env| {
-            env.print(" "); Ok(())
-        },
-    });
-    env.insert_builtin("\no", BuiltIn {
-        name: "Newline_output".to_string(),
-        func: |env| {
-            env.print("\n"); Ok(())
-        },
-    });
-    env.insert_builtin("Q", BuiltIn {
-        name: "Break".to_string(),
-        func: |_| Err(PdError::Break),
-    });
-    env.insert_builtin("K", BuiltIn {
-        name: "Continue".to_string(),
-        func: |_| Err(PdError::Continue),
-    });
-    env.insert_builtin("?", BuiltIn {
-        name: "If_else".to_string(),
-        func: |env| {
-            let else_branch = env.pop_result("If_else else failed")?;
-            let if_branch   = env.pop_result("If_else if failed")?;
-            let condition   = env.pop_result("If_else condition failed")?;
-            if pd_truthy(&condition) {
-                apply_on(env, if_branch)
-            } else {
-                apply_on(env, else_branch)
-            }
-        },
-    });
+    add_builtin!("Expand_or_eval", |env| {
+        match env.pop_result("~ failed")? {
+            PdObj::Block(bb) => bb.run(env),
+            PdObj::List(ls) => { env.extend_clone(&*ls); Ok(()) }
+            _ => Err(PdError::BadArgument("~ can't handle".to_string())),
+        }
+    }, alias "~");
+    add_builtin!("Output", |env| {
+        let obj = env.pop_result("O failed")?;
+        env.print(&env.to_string(&obj));
+        Ok(())
+    }, alias "O");
+    add_builtin!("Print", |env| {
+        let obj = env.pop_result("P failed")?;
+        env.println(&env.to_string(&obj));
+        Ok(())
+    }, alias "P");
+    add_builtin!("Input", |env| {
+        let obj = env.run_stack_trigger().ok_or(PdError::InputError)?;
+        env.push(obj);
+        Ok(())
+    }, alias "V");
+    add_builtin!("Space_output", |env| {
+        env.print(" "); Ok(())
+    }, alias " o");
+    add_builtin!("Newline_output", |env| {
+        env.print("\n"); Ok(())
+    }, aliases ["\no", "\\no"]);
+    add_builtin!("Break",    |_| Err(PdError::Break),    alias "Q");
+    add_builtin!("Continue", |_| Err(PdError::Continue), alias "K");
+    add_builtin!("If_else", |env| {
+        let else_branch = env.pop_result("If_else else failed")?;
+        let if_branch   = env.pop_result("If_else if failed")?;
+        let condition   = env.pop_result("If_else condition failed")?;
+        if pd_truthy(&condition) {
+            apply_on(env, if_branch)
+        } else {
+            apply_on(env, else_branch)
+        }
+    }, alias "?");
     env.insert_builtin("Á", DeepZipBlock {
         func: |a, b| a + b,
         name: "plus".to_string(),
@@ -4276,22 +4243,16 @@ pub fn initialize(env: &mut Environment) {
         name: "nest_char".to_string(),
     });
 
-    env.insert_builtin("·", BuiltIn {
-        name: "Assign_bullet".to_string(),
-        func: |env| {
-            let obj = env.peek_result("Assign_bullet failed")?;
-            env.insert("•".to_string(), obj);
-            Ok(())
-        },
-    });
-    env.insert_builtin("–", BuiltIn {
-        name: "Assign_bullet_destructive".to_string(),
-        func: |env| {
-            let obj = env.pop_result("Assign_bullet_destructive failed")?;
-            env.insert("•".to_string(), obj);
-            Ok(())
-        },
-    });
+    add_builtin!("Assign_bullet", |env| {
+        let obj = env.peek_result("Assign_bullet failed")?;
+        env.insert("•".to_string(), obj);
+        Ok(())
+    }, alias "·");
+    add_builtin!("Assign_bullet_destructive", |env| {
+        let obj = env.pop_result("Assign_bullet_destructive failed")?;
+        env.insert("•".to_string(), obj);
+        Ok(())
+    }, alias "–");
 }
 
 pub fn simple_eval(code: &str) -> Vec<PdObj> {
