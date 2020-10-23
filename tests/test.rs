@@ -38,6 +38,24 @@ fn basic() {
 }
 
 #[test]
+fn math() {
+    assert_eq!(paradoc::simple_eval("3 4+"), intvec![7]);
+    assert_eq!(paradoc::simple_eval("3 4-"), intvec![-1]);
+    assert_eq!(paradoc::simple_eval("3 4*"), intvec![12]);
+    assert_eq!(paradoc::simple_eval("3 4/"), vec![PdObj::from(0.75f64)]);
+
+    assert_eq!(paradoc::simple_eval("3 5&"), intvec![1]);
+    assert_eq!(paradoc::simple_eval("3 5|"), intvec![7]);
+    assert_eq!(paradoc::simple_eval("3 5^"), intvec![6]);
+    assert_eq!(paradoc::simple_eval("3 5<s"), intvec![96]);
+    assert_eq!(paradoc::simple_eval("253 492&"), intvec![236]);
+    assert_eq!(paradoc::simple_eval("253 492|"), intvec![509]);
+    assert_eq!(paradoc::simple_eval("253 492^"), intvec![273]);
+    assert_eq!(paradoc::simple_eval("253 3<s"), intvec![2024]);
+    assert_eq!(paradoc::simple_eval("253 3>s"), intvec![31]);
+}
+
+#[test]
 fn readme() {
     assert_eq!(paradoc::simple_eval("¹²m"), vec![liv![0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100]]);
 }
@@ -67,6 +85,11 @@ fn map() {
 #[test]
 fn block() {
     assert_eq!(paradoc::simple_eval("3 4{+}~"), vec![int(7)]);
+}
+
+#[test]
+fn composition() {
+    assert_eq!(paradoc::simple_eval("253 492 {^} {²} + ~"), intvec![74529]);
 }
 
 #[test]

@@ -95,7 +95,7 @@ impl PdNum {
         match self {
             PdNum::Int(_) => self.clone(),
             PdNum::Char(_) => self.clone(),
-            PdNum::Float(f) => PdNum::Int(f.ceil().to_bigint().expect("Ceiling of float was not integer")),
+            PdNum::Float(f) => f.ceil().to_bigint().map_or(self.clone(), PdNum::Int),
         }
     }
 
@@ -103,7 +103,7 @@ impl PdNum {
         match self {
             PdNum::Int(_) => self.clone(),
             PdNum::Char(_) => self.clone(),
-            PdNum::Float(f) => PdNum::Int(f.floor().to_bigint().expect("Floor of float was not integer")),
+            PdNum::Float(f) => f.floor().to_bigint().map_or(self.clone(), PdNum::Int),
         }
     }
 
@@ -111,7 +111,7 @@ impl PdNum {
         match self {
             PdNum::Int(_) => self.clone(),
             PdNum::Char(_) => self.clone(),
-            PdNum::Float(f) => PdNum::Int(f.trunc().to_bigint().expect("Truncation of float was not integer")),
+            PdNum::Float(f) => f.trunc().to_bigint().map_or(self.clone(), PdNum::Int),
         }
     }
 
@@ -176,6 +176,18 @@ impl PdNum {
             PdNum::Int(i) => i.to_f64(),
             PdNum::Float(f) => Some(*f),
             PdNum::Char(c) => c.to_f64(),
+        }
+    }
+
+    pub fn to_f64_or_inf(&self) -> f64 {
+        match self {
+            PdNum::Int(i) => i.to_f64().unwrap_or_else(|| {
+                if i.is_positive() { f64::INFINITY } else { f64::NEG_INFINITY }
+            }),
+            PdNum::Float(f) => *f,
+            PdNum::Char(c) => c.to_f64().unwrap_or_else(|| {
+                if c.is_positive() { f64::INFINITY } else { f64::NEG_INFINITY }
+            }),
         }
     }
 
@@ -281,7 +293,10 @@ impl PdNum {
     }
 
     pub fn through_float<F>(&self, f: F) -> PdNum where F: FnOnce(f64) -> f64 {
-        PdNum::Float(f(self.to_f64().expect("can't through float")))
+        PdNum::Float(match self.to_f64() {
+            Some(x) => f(x),
+            None => f64::NAN,
+        })
     }
 
     pub fn iverson(b: bool) -> Self { PdNum::from(if b { 1 } else { 0 }) }
@@ -523,7 +538,7 @@ impl_binary_method!(Rem, rem, Integer::mod_floor, f64::rem_euclid);
 impl Div<&PdNum> for &PdNum {
     type Output = PdNum;
     fn div(self, other: &PdNum) -> PdNum {
-        PdNum::Float(self.to_f64().expect("division float fail") / other.to_f64().expect("division float fail"))
+        PdNum::Float(self.to_f64_or_inf() / other.to_f64_or_inf())
     }
 }
 
@@ -613,5 +628,23 @@ impl_force_bi_binary_method!(BitXor, bitxor, BitXor::bitxor);
 impl PdNum {
     pub fn gcd(&self, other: &PdNum) -> PdNum {
         force_bi_binary_match!(self, other, gcd, Integer::gcd)
+    }
+
+    pub fn shl_opt(&self, other: &PdNum) -> Option<PdNum> {
+        let shift_amount: usize = other.to_usize()?;
+        Some(match self {
+            PdNum::Int(a) => PdNum::Int(a << shift_amount),
+            PdNum::Char(a) => PdNum::Char(a << shift_amount),
+            PdNum::Float(a) => PdNum::Int(a.trunc().to_bigint()? << shift_amount),
+        })
+    }
+
+    pub fn shr_opt(&self, other: &PdNum) -> Option<PdNum> {
+        let shift_amount: usize = other.to_usize()?;
+        Some(match self {
+            PdNum::Int(a) => PdNum::Int(a >> shift_amount),
+            PdNum::Char(a) => PdNum::Char(a >> shift_amount),
+            PdNum::Float(a) => PdNum::Int(a.trunc().to_bigint()? >> shift_amount),
+        })
     }
 }

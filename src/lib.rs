@@ -321,6 +321,27 @@ impl Environment {
         vars.insert(s, obj.into());
     }
 
+    fn insert_cased_builtin(&mut self, primary_name: &str, cases: Vec<Rc<dyn Case>>, aliases: &[&str]) {
+        let mut arity = 0;
+        for case in cases.iter() {
+            if case.arity() < arity {
+                panic!("cases not sorted: {}", primary_name);
+            }
+            arity = case.arity();
+        }
+
+        let cb: Rc<dyn Block> = Rc::new(CasedBuiltIn {
+            name: primary_name.to_string(),
+            cases,
+        });
+
+        for alias in aliases {
+            self.insert_builtin(alias, PdObj::Block(Rc::clone(&cb)));
+        }
+
+        self.insert_builtin(primary_name, PdObj::Block(cb));
+    }
+
     fn peek_x_stack(&self, depth: usize) -> Option<&PdObj> {
         let x_stack = self.borrow_x_stack();
         x_stack.get(x_stack.len().checked_sub(depth + 1)?)
@@ -1254,6 +1275,25 @@ impl Block for CasedBuiltIn {
     }
     fn code_repr(&self) -> String {
         self.name.clone()
+    }
+}
+
+struct CompositionBlock {
+    block1: Rc<dyn Block>,
+    block2: Rc<dyn Block>,
+}
+impl Debug for CompositionBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "CompositionBlock {{ block1: {:?}, block2: {:?} }}", self.block1, self.block2)
+    }
+}
+impl Block for CompositionBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        self.block1.run(env)?;
+        self.block2.run(env)
+    }
+    fn code_repr(&self) -> String {
+        format!("{}{}+", self.block1.code_repr(), self.block2.code_repr())
     }
 }
 
@@ -2785,6 +2825,13 @@ pub fn initialize(env: &mut Environment) {
     let intdiv_case = nn_n![a, b, a.div_floor(b)];
     let pow_case = nn_n![a, b, a.pow_num(b)];
 
+    let shl_case = binary_num_case(|_, a, b| {
+        Ok(vec![PdObj::from(a.shl_opt(&**b).ok_or(PdError::NumericError("bad left shift"))?)])
+    });
+    let shr_case = binary_num_case(|_, a, b| {
+        Ok(vec![PdObj::from(a.shr_opt(&**b).ok_or(PdError::NumericError("bad left shift"))?)])
+    });
+
     let divmod_case = binary_num_case(|_, a0, b0| {
         let a: &PdNum = &**a0;
         let b: &PdNum = &**b0;
@@ -2879,21 +2926,22 @@ pub fn initialize(env: &mut Environment) {
     let last_case = unary_seq_range_case(|_, a| { Ok(vec![a.last().ok_or(PdError::BadList("Last of empty list"))?.to_rc_pd_obj() ]) });
     let butlast_case = unary_seq_range_case(|_, a| { Ok(vec![a.split_last().ok_or(PdError::BadList("Butlast of empty list"))?.1]) });
 
-    let mut add_cases = |name: &str, cases: Vec<Rc<dyn Case>>| {
-        let mut arity = 0;
-        for case in cases.iter() {
-            if case.arity() < arity {
-                panic!("cases not sorted: {}", name);
-            }
-            arity = case.arity();
-        }
+    macro_rules! add_cases {
+        ($name:expr, $cases:expr) => {
+            env.insert_cased_builtin($name, $cases, &[]);
+        };
+        ($name:expr, $cases:expr, alias $alias:literal) => {
+            env.insert_cased_builtin($name, $cases, &vec![$alias]);
+        };
+        ($name:expr, $cases:expr, aliases [$($alias:literal),*]) => {
+            env.insert_cased_builtin($name, $cases, &vec![$($alias),*]);
+        };
+    }
 
-        env.insert_builtin(name, CasedBuiltIn {
-            name: name.to_string(),
-            cases,
-        });
-    };
-
+    let each_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
+        pd_each(env, a, b.iter())?;
+        Ok(vec![])
+    });
     let map_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         Ok(vec![pd_map(env, a, b)?])
     });
@@ -2915,6 +2963,17 @@ pub fn initialize(env: &mut Environment) {
 
     let xloop_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
         pd_xloop(env, a, b.iter())?; Ok(vec![])
+    });
+
+    let compose_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_block,
+        coerce2: just_block,
+        func: |_, block1: &Rc<dyn Block>, block2: &Rc<dyn Block>| {
+            Ok(vec![PdObj::from(CompositionBlock {
+                block1: Rc::clone(block1),
+                block2: Rc::clone(block2),
+            })])
+        },
     });
 
     let filter_case: Rc<dyn Case> = block_seq_range_case(|env, a, b| {
@@ -3155,6 +3214,14 @@ pub fn initialize(env: &mut Environment) {
             v.extend((&**seq2).iter().cloned());
 
             Ok(vec![(PdObj::List(Rc::new(v)))])
+        },
+    });
+
+    let str_cat_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: just_value,
+        coerce2: just_value,
+        func: |env: &mut Environment, val1: &PdObj, val2: &PdObj| {
+            Ok(vec![PdObj::from(env.to_string(val1) + &env.to_string(val2))])
         },
     });
 
@@ -3618,122 +3685,137 @@ pub fn initialize(env: &mut Environment) {
         func: |env, a| Ok(vec![PdObj::clone(env.index_stack(a.to_usize().ok_or(PdError::BadArgument("can't index stack bad".to_string()))?).ok_or(PdError::EmptyStack("index stack".to_string()))?)])
     });
 
-    add_cases("+", cc![plus_case, cat_list_case, filter_case]);
-    add_cases("Cb", cc![cat_between_case]);
-    add_cases("Cf", cc![cat_flanking_case]);
-    add_cases("-", cc![minus_case, set_difference_case, reject_case]);
-    add_cases("-c", cc![clamped_minus_case]);
-    add_cases("¯", cc![antiminus_case, anti_set_difference_case]);
-    add_cases("*", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case]);
-    add_cases("T", cc![cartesian_product_case, map_cartesian_product_case]);
-    add_cases("/", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case]);
-    add_cases("%", cc![mod_case, mod_slice_case, map_case]);
-    add_cases("‰", cc![divmod_case, zip_as_list_case, zip_with_block_case]);
-    add_cases("ˆ", cc![pow_case, cartesian_power_case]);
-    add_cases("*p", cc![pow_case, cartesian_power_case]);
-    add_cases("÷", cc![intdiv_case, seq_split_discarding_case]);
-    add_cases("&", cc![bitand_case, intersection_case, just_if_case]);
-    add_cases("|", cc![bitor_case, union_case, just_unless_case]);
-    add_cases("If", cc![just_if_case]);
-    add_cases("Ul", cc![just_unless_case]);
-    add_cases("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
-    add_cases("(", cc![dec_case, uncons_case, modify_first_case]);
-    add_cases(")", cc![inc_case, unsnoc_case, modify_last_case]);
-    add_cases("=", cc![index_hoard_case, eq_case, index_case, find_case]);
-    add_cases("@", cc![find_index_str_str_case, find_index_equal_case, find_index_case]);
-    add_cases("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
-    add_cases("<", cc![lt_case, lt_slice_case, take_while_case]);
-    add_cases(">", cc![gt_case, ge_slice_case, drop_while_case]);
-    add_cases("<c", cc![cycle_left_case]);
-    add_cases(">c", cc![cycle_right_case]);
-    add_cases("<o", cc![cycle_left_one_case]);
-    add_cases(">o", cc![cycle_right_one_case]);
-    add_cases("<m", cc![min_case]);
-    add_cases(">m", cc![max_case]);
-    add_cases("Õ", cc![min_case]);
-    add_cases("Ã", cc![max_case]);
-    add_cases("<r", cc![min_seq_case, min_seq_by_case]);
-    add_cases(">r", cc![max_seq_case, max_seq_by_case]);
-    add_cases("D", cc![down_case]);
-    add_cases("W", cc![seq_words_case, seq_window_case]);
-    add_cases("L", cc![abs_case, hoard_len_case, len_case]);
-    add_cases("M", cc![neg_case]);
-    add_cases("U", cc![signum_case, uniquify_case]);
-    add_cases("=g", cc![first_duplicate_case]);
-    add_cases("Œ", cc![min_seq_case, min_seq_by_case]);
-    add_cases("Æ", cc![max_seq_case, max_seq_by_case]);
-    add_cases("Œs", cc![minima_seq_case, minima_seq_by_case]);
-    add_cases("Æs", cc![maxima_seq_case, maxima_seq_by_case]);
-    add_cases("‹", cc![floor_case, hoard_first_case, first_case]);
-    add_cases("›", cc![ceil_case, hoard_last_case, last_case]);
-    add_cases("«", cc![dec2_case, butlast_case]);
-    add_cases("»", cc![inc2_case, rest_case]);
-    add_cases("×", cc![double_case]);
-    add_cases("½", cc![frac_12_case]);
-    add_cases("¼", cc![frac_14_case]);
-    add_cases("¾", cc![frac_34_case]);
-    add_cases("²", cc![square_case, square_cartesian_product_case]);
-    add_cases("³", cc![cube_case, cube_cartesian_product_case]);
-    add_cases("¡", cc![factorial_case, permutations_case]);
-    add_cases("!p", cc![factorial_case, permutations_case]);
-    add_cases("¿", cc![two_to_the_power_of_case, subsequences_case]);
-    add_cases("Ss", cc![two_to_the_power_of_case, subsequences_case]);
-    add_cases("B", cc![to_base_digits_case, from_base_digits_case, flatmap_cartesian_product_case]);
-    add_cases("Ub", cc![to_upper_base_digits_case]);
-    add_cases("Lb", cc![to_lower_base_digits_case]);
-    add_cases("™", cc![transpose_case]);
-    add_cases("Tt", cc![transpose_case]);
-    add_cases(" r", cc![space_join_case]);
-    add_cases(",", cc![range_case, zip_range_case, filter_indices_case]);
-    add_cases("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
-    add_cases("Ð", cc![down_one_range_case, map_down_singleton_case]);
-    add_cases("Fo", cc![flatten_case]);
-    add_cases("Fl", cc![flatten_all_case]);
-    add_cases("…", cc![flatten_all_case, to_range_case]);
-    add_cases("¨", cc![flatten_case, til_range_case]);
-    add_cases("´", cc![range_len_keep_case]);
-    add_cases("To", cc![to_range_case]);
-    add_cases("Tl", cc![til_range_case]);
+    add_cases!("Plus", cc![plus_case]);
+    add_cases!("Cat", cc![cat_list_case]);
+    add_cases!("Strcat", cc![str_cat_case]);
+    add_cases!("Compose", cc![compose_case]);
+    add_cases!("+", cc![plus_case, cat_list_case, str_cat_case, filter_case, compose_case]);
 
-    add_cases("R", cc![join_case, reduce_case]);
-    add_cases("G", cc![group_case, gcd_case, group_by_case]);
-    add_cases("Ø", cc![organize_case, organize_by_case]);
-    add_cases("$", cc![index_stack_case, sort_case, sort_by_case]);
-    add_cases("¢", cc![order_statistic_case, order_statistic_by_case]);
-    add_cases("$p", cc![is_sorted_case, is_sorted_by_case]);
-    add_cases("<p", cc![is_strictly_increasing_case, is_strictly_increasing_by_case]);
-    add_cases(">p", cc![is_strictly_decreasing_case, is_strictly_decreasing_by_case]);
-    add_cases("Â", cc![positive_case, all_case]);
-    add_cases("Ê", cc![even_case, any_case]);
-    add_cases("Î", cc![equals_one_case, identical_case]);
-    add_cases("Ô", cc![odd_case, not_any_case]);
-    add_cases("Û", cc![negative_case, unique_case]);
-    add_cases("Al", cc![all_case]);
-    add_cases("Ay", cc![any_case]);
-    add_cases("Na", cc![not_all_case]);
-    add_cases("Ne", cc![not_any_case]);
-    add_cases("=p", cc![identical_case]);
-    add_cases("Ev", cc![even_case]);
-    add_cases("Od", cc![odd_case]);
-    add_cases("+p", cc![positive_case]);
-    add_cases("-p", cc![negative_case]);
-    add_cases("+o", cc![positive_or_zero_case]);
-    add_cases("-o", cc![negative_or_zero_case]);
+    add_cases!("Cat_between", cc![cat_between_case], alias "Cb");
+    add_cases!("Cat_flank", cc![cat_flanking_case], alias "Cf");
 
-    add_cases(":",   vec![juggle!(a -> a, a)]);
-    add_cases(":p",  vec![juggle!(a, b -> a, b, a, b)]);
-    add_cases("¦",   vec![juggle!(a, b -> a, b, a, b)]);
-    add_cases(":o",  vec![juggle!(a, b -> a, b, a)]);
-    add_cases("\\",  vec![juggle!(a, b -> b, a)]);
-    add_cases("\\a", vec![juggle!(a, b, c -> c, b, a)]);
-    add_cases("\\i", vec![juggle!(a, b, c -> c, a, b)]);
-    add_cases("\\o", vec![juggle!(a, b, c -> b, c, a)]);
+    add_cases!("Minus", cc![minus_case]);
+    add_cases!("Filter_not_in", cc![set_difference_case]);
+    add_cases!("Reject_in", cc![set_difference_case]);
+    add_cases!("Filter_not", cc![reject_case]);
+    add_cases!("Reject", cc![reject_case]);
+    add_cases!("-", cc![minus_case, set_difference_case, reject_case]);
+    add_cases!("-c", cc![clamped_minus_case]);
+    add_cases!("Antiminus", cc![antiminus_case]);
+    add_cases!("¯", cc![antiminus_case, anti_set_difference_case]);
 
-    add_cases(";",   vec![juggle!(_a -> )]);
-    add_cases(";o",  vec![juggle!(_a, b, c -> b, c)]);
-    add_cases(";p",  vec![juggle!(_a, _b, c -> c)]);
-    add_cases(";a",  vec![juggle!(_a, b, _c -> b)]);
-    add_cases("¸",   vec![juggle!(_a, b -> b)]);
+    add_cases!("Mul_or_xloop", cc![times_case, repeat_seq_case, flat_cartesian_product_case, xloop_case], alias "*");
+    add_cases!("Table", cc![cartesian_product_case, map_cartesian_product_case], alias "T");
+    add_cases!("Div_or_split_or_each", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case, each_case], alias "/");
+    add_cases!("%", cc![mod_case, mod_slice_case, map_case]);
+    add_cases!("Divmod_or_zip", cc![divmod_case, zip_as_list_case, zip_with_block_case], aliases ["%p", "‰"]);
+    add_cases!("Power", cc![pow_case, cartesian_power_case], aliases ["*p", "ˆ"]);
+    add_cases!("÷", cc![intdiv_case, seq_split_discarding_case]);
+    add_cases!("&", cc![bitand_case, intersection_case, just_if_case]);
+    add_cases!("|", cc![bitor_case, union_case, just_unless_case]);
+    add_cases!("<s", cc![shl_case]);
+    add_cases!(">s", cc![shr_case]);
+    add_cases!("If", cc![just_if_case]);
+    add_cases!("Ul", cc![just_unless_case]);
+
+    add_cases!("^", cc![bitxor_case, symmetric_difference_case, find_not_case]);
+    add_cases!("(", cc![dec_case, uncons_case, modify_first_case]);
+    add_cases!(")", cc![inc_case, unsnoc_case, modify_last_case]);
+    add_cases!("=", cc![index_hoard_case, eq_case, index_case, find_case]);
+    add_cases!("Find_index", cc![find_index_str_str_case, find_index_equal_case, find_index_case], alias "@");
+    add_cases!("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
+    add_cases!("<", cc![lt_case, lt_slice_case, take_while_case]);
+    add_cases!(">", cc![gt_case, ge_slice_case, drop_while_case]);
+    add_cases!("<c", cc![cycle_left_case]);
+    add_cases!(">c", cc![cycle_right_case]);
+    add_cases!("<o", cc![cycle_left_one_case]);
+    add_cases!(">o", cc![cycle_right_one_case]);
+    add_cases!("<m", cc![min_case]);
+    add_cases!(">m", cc![max_case]);
+    add_cases!("Õ", cc![min_case]);
+    add_cases!("Ã", cc![max_case]);
+    add_cases!("<r", cc![min_seq_case, min_seq_by_case]);
+    add_cases!(">r", cc![max_seq_case, max_seq_by_case]);
+    add_cases!("D", cc![down_case]);
+    add_cases!("W", cc![seq_words_case, seq_window_case]);
+    add_cases!("L", cc![abs_case, hoard_len_case, len_case]);
+    add_cases!("M", cc![neg_case]);
+    add_cases!("U", cc![signum_case, uniquify_case]);
+    add_cases!("=g", cc![first_duplicate_case]);
+    add_cases!("Œ", cc![min_seq_case, min_seq_by_case]);
+    add_cases!("Æ", cc![max_seq_case, max_seq_by_case]);
+    add_cases!("Œs", cc![minima_seq_case, minima_seq_by_case]);
+    add_cases!("Æs", cc![maxima_seq_case, maxima_seq_by_case]);
+    add_cases!("‹", cc![floor_case, hoard_first_case, first_case]);
+    add_cases!("›", cc![ceil_case, hoard_last_case, last_case]);
+    add_cases!("«", cc![dec2_case, butlast_case]);
+    add_cases!("»", cc![inc2_case, rest_case]);
+    add_cases!("×", cc![double_case]);
+    add_cases!("½", cc![frac_12_case]);
+    add_cases!("¼", cc![frac_14_case]);
+    add_cases!("¾", cc![frac_34_case]);
+    add_cases!("²", cc![square_case, square_cartesian_product_case]);
+    add_cases!("³", cc![cube_case, cube_cartesian_product_case]);
+    add_cases!("¡", cc![factorial_case, permutations_case]);
+    add_cases!("!p", cc![factorial_case, permutations_case]);
+    add_cases!("¿", cc![two_to_the_power_of_case, subsequences_case]);
+    add_cases!("Ss", cc![two_to_the_power_of_case, subsequences_case]);
+    add_cases!("B", cc![to_base_digits_case, from_base_digits_case, flatmap_cartesian_product_case]);
+    add_cases!("Ub", cc![to_upper_base_digits_case]);
+    add_cases!("Lb", cc![to_lower_base_digits_case]);
+    add_cases!("™", cc![transpose_case]);
+    add_cases!("Tt", cc![transpose_case]);
+    add_cases!(" r", cc![space_join_case]);
+    add_cases!(",", cc![range_case, zip_range_case, filter_indices_case]);
+    add_cases!("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
+    add_cases!("Ð", cc![down_one_range_case, map_down_singleton_case]);
+    add_cases!("Fo", cc![flatten_case]);
+    add_cases!("Fl", cc![flatten_all_case]);
+    add_cases!("…", cc![flatten_all_case, to_range_case]);
+    add_cases!("¨", cc![flatten_case, til_range_case]);
+    add_cases!("´", cc![range_len_keep_case]);
+    add_cases!("To", cc![to_range_case]);
+    add_cases!("Tl", cc![til_range_case]);
+
+    add_cases!("R", cc![join_case, reduce_case]);
+    add_cases!("G", cc![group_case, gcd_case, group_by_case]);
+    add_cases!("Ø", cc![organize_case, organize_by_case]);
+    add_cases!("$", cc![index_stack_case, sort_case, sort_by_case]);
+    add_cases!("¢", cc![order_statistic_case, order_statistic_by_case]);
+    add_cases!("$p", cc![is_sorted_case, is_sorted_by_case]);
+    add_cases!("<p", cc![is_strictly_increasing_case, is_strictly_increasing_by_case]);
+    add_cases!(">p", cc![is_strictly_decreasing_case, is_strictly_decreasing_by_case]);
+    add_cases!("Â", cc![positive_case, all_case]);
+    add_cases!("Ê", cc![even_case, any_case]);
+    add_cases!("Î", cc![equals_one_case, identical_case]);
+    add_cases!("Ô", cc![odd_case, not_any_case]);
+    add_cases!("Û", cc![negative_case, unique_case]);
+    add_cases!("Al", cc![all_case]);
+    add_cases!("Ay", cc![any_case]);
+    add_cases!("Na", cc![not_all_case]);
+    add_cases!("Ne", cc![not_any_case]);
+    add_cases!("=p", cc![identical_case]);
+    add_cases!("Ev", cc![even_case]);
+    add_cases!("Od", cc![odd_case]);
+    add_cases!("+p", cc![positive_case]);
+    add_cases!("-p", cc![negative_case]);
+    add_cases!("+o", cc![positive_or_zero_case]);
+    add_cases!("-o", cc![negative_or_zero_case]);
+
+    add_cases!("Dup",      vec![juggle!(a -> a, a)], alias ":");
+    add_cases!("Dup_pair", vec![juggle!(a, b -> a, b, a, b)], aliases [":p", "¦"]);
+    add_cases!("Dup_out",  vec![juggle!(a, b -> a, b, a)], alias ":o");
+
+    add_cases!("Swap",        vec![juggle!(a, b -> b, a)], alias "\\");
+    add_cases!("Swap_around", vec![juggle!(a, b, c -> c, b, a)], alias "\\a");
+    add_cases!("Swap_in",     vec![juggle!(a, b, c -> c, a, b)], alias "\\i");
+    add_cases!("Swap_out",    vec![juggle!(a, b, c -> b, c, a)], alias "\\o");
+
+    add_cases!("Pop",        vec![juggle!(_a -> )], alias ";");
+    add_cases!("Pop_out",    vec![juggle!(_a, b, c -> b, c)], alias ";o");
+    add_cases!("Pop_pair",   vec![juggle!(_a, _b, c -> c)], alias ";p");
+    add_cases!("Pop_around", vec![juggle!(_a, b, _c -> b)], alias ";a");
+    add_cases!("¸",          vec![juggle!(_a, b -> b)]);
 
     let is_int_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::iverson(match a {
         PdObj::Num(x) => match &**x {
@@ -3776,45 +3858,45 @@ pub fn initialize(env: &mut Environment) {
         PdObj::Hoard(_) => true,
         _ => false,
     })])});
-    add_cases(":i", cc![is_int_case]);
-    add_cases(":f", cc![is_float_case]);
-    add_cases(":c", cc![is_char_case]);
-    add_cases(":n", cc![is_num_case]);
-    add_cases(":s", cc![is_string_case]);
-    add_cases(":a", cc![is_array_case]);
-    add_cases(":b", cc![is_block_case]);
-    add_cases(":h", cc![is_hoard_case]);
+    add_cases!(":i", cc![is_int_case]);
+    add_cases!(":f", cc![is_float_case]);
+    add_cases!(":c", cc![is_char_case]);
+    add_cases!(":n", cc![is_num_case]);
+    add_cases!(":s", cc![is_string_case]);
+    add_cases!(":a", cc![is_array_case]);
+    add_cases!(":b", cc![is_block_case]);
+    add_cases!(":h", cc![is_hoard_case]);
 
     let pop_if_true_case:  Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![] } else { vec![PdObj::clone(a)] })]) });
     let pop_if_false_case: Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![PdObj::clone(a)] } else { vec![] })]) });
     let pop_if_case:       Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(if pd_truthy(b) { vec![] } else { vec![PdObj::clone(a)] })]) });
     let pop_if_not_case:   Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(if pd_truthy(b) { vec![PdObj::clone(a)] } else { vec![] })]) });
-    add_cases(";i",  vec![pop_if_case]);
-    add_cases(";n",  vec![pop_if_not_case]);
-    add_cases(";t",  vec![pop_if_true_case]);
-    add_cases(";f",  vec![pop_if_false_case]);
+    add_cases!(";i",  vec![pop_if_case]);
+    add_cases!(";n",  vec![pop_if_not_case]);
+    add_cases!(";t",  vec![pop_if_true_case]);
+    add_cases!(";f",  vec![pop_if_false_case]);
 
     let pack_one_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![pd_list(vec![PdObj::clone(a)])]) });
-    add_cases("†", cc![pack_one_case]);
+    add_cases!("†", cc![pack_one_case]);
     let pack_two_case: Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(vec![PdObj::clone(a), PdObj::clone(b)])]) });
-    add_cases("‡", cc![pack_two_case]);
+    add_cases!("‡", cc![pack_two_case]);
     let not_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::iverson(!pd_truthy(a)))]) });
-    add_cases("!", cc![not_case]);
+    add_cases!("!", cc![not_case]);
 
     let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)?))]) });
-    add_cases("Š", cc![sum_case]);
+    add_cases!("Š", cc![sum_case]);
 
     let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_product(a)?))]) });
-    add_cases("Þ", cc![product_case]);
+    add_cases!("Þ", cc![product_case]);
 
     let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)? / PdNum::Float(pd_deep_length(a)? as f64)))]) });
-    add_cases("Av", cc![average_case]);
+    add_cases!("Av", cc![average_case]);
 
     let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_square_sum(a)?.sqrt().ok_or(PdError::NumericError("sqrt in hypotenuse failed"))?))]) });
-    add_cases("Hy", cc![hypotenuse_case]);
+    add_cases!("Hy", cc![hypotenuse_case]);
 
     let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_standard_deviation(a)?))]) });
-    add_cases("Sg", cc![standard_deviation_case]);
+    add_cases!("Sg", cc![standard_deviation_case]);
 
     // FIXME
     let string_to_int_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -3825,15 +3907,15 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_block,
         func: |env, block| Ok(vec![pd_list(pd_iterate(env, block)?.0)]),
     });
-    add_cases("I", cc![trunc_case, string_to_int_case, iterate_case]);
+    add_cases!("I", cc![trunc_case, string_to_int_case, iterate_case]);
 
     let int_groups_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
         func: |_, s: &Rc<Vec<char>>| Ok(vec![pd_list(int_groups(&s.iter().collect::<String>()).map(|i| PdObj::from(i)).collect())]),
     });
-    add_cases("Ig", cc![int_groups_case]);
+    add_cases!("Ig", cc![int_groups_case]);
 
-    let to_float_case: Rc<dyn Case> = n_n![a, a.to_f64().expect("can't to_float")];
+    let to_float_case: Rc<dyn Case> = n_n![a, a.to_f64_or_inf()];
     let string_to_float_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
         func: |_, s: &Rc<Vec<char>>| Ok(vec![PdObj::from(s.iter().collect::<String>().parse::<f64>().map_err(|_| PdError::BadParse)?)]),
@@ -3842,19 +3924,19 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_block,
         func: |env, block| Ok(vec![pd_iterate(env, block)?.1]),
     });
-    add_cases("F", cc![to_float_case, string_to_float_case, fixed_point_case]);
+    add_cases!("F", cc![to_float_case, string_to_float_case, fixed_point_case]);
 
     let float_groups_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
         func: |_, s: &Rc<Vec<char>>| Ok(vec![pd_list(float_groups(&s.iter().collect::<String>()).map(|i| PdObj::from(i)).collect())]),
     });
-    add_cases("Fg", cc![float_groups_case]);
+    add_cases!("Fg", cc![float_groups_case]);
 
     let to_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| Ok(vec![PdObj::from(env.to_string(a))]) });
-    add_cases("S", cc![to_string_case]);
+    add_cases!("S", cc![to_string_case]);
 
     let to_repr_string_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |env, a| Ok(vec![PdObj::from(env.to_repr_string(a))]) });
-    add_cases("`", cc![to_repr_string_case]);
+    add_cases!("`", cc![to_repr_string_case]);
 
     let replicate_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_any,
@@ -3863,7 +3945,7 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_list(vu::replicate_clones(*n, a))])
         },
     });
-    add_cases("°", cc![replicate_case]);
+    add_cases!("°", cc![replicate_case]);
 
     env.insert_builtin("H", Hoard::new());
     env.insert_builtin("•", Hoard::new());
@@ -3885,6 +3967,8 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("Ua", str_class("A-Z"));
     env.insert_builtin("La", str_class("a-z"));
     env.insert_builtin("Aa", str_class("A-Za-z"));
+
+    env.insert_builtin("Hw", "Hello, World!");
 
     // # Non-breaking space (U+00A0)
     env.insert_builtin("\u{a0}", ' ');
@@ -3911,14 +3995,16 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("Åy", case_double("AEIOUY"));
     env.insert_builtin("Åz", str_class("z-aZ-A"));
 
-    env.insert_builtin(" ", BuiltIn {
+    let nop_builtin: PdObj = PdObj::Block(Rc::new(BuiltIn {
         name: "Nop".to_string(),
         func: |_env| Ok(()),
-    });
-    env.insert_builtin("\n", BuiltIn {
-        name: "Nop".to_string(),
-        func: |_env| Ok(()),
-    });
+    }));
+
+    env.insert_builtin("Nop", PdObj::clone(&nop_builtin));
+    env.insert_builtin(" ", PdObj::clone(&nop_builtin));
+    env.insert_builtin("\n", PdObj::clone(&nop_builtin));
+    env.insert_builtin("\r", PdObj::clone(&nop_builtin));
+    env.insert_builtin("\t", PdObj::clone(&nop_builtin));
     env.insert_builtin("[", BuiltIn {
         name: "Mark_stack".to_string(),
         func: |env| { env.mark_stack(); Ok(()) },
