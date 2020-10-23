@@ -69,6 +69,18 @@ fn factorial_big_int(a: &BigInt) -> BigInt {
     ret
 }
 
+macro_rules! forward_int_coercion {
+    ($method:ident) => {
+        pub fn $method(&self) -> PdNum {
+            match self {
+                PdNum::Int(_) => self.clone(),
+                PdNum::Char(_) => self.clone(),
+                PdNum::Float(f) => f.$method().to_bigint().map_or(self.clone(), PdNum::Int),
+            }
+        }
+    };
+}
+
 impl PdNum {
     pub fn to_string(&self) -> String {
         match self {
@@ -91,29 +103,10 @@ impl PdNum {
         }
     }
 
-    pub fn ceil(&self) -> PdNum {
-        match self {
-            PdNum::Int(_) => self.clone(),
-            PdNum::Char(_) => self.clone(),
-            PdNum::Float(f) => f.ceil().to_bigint().map_or(self.clone(), PdNum::Int),
-        }
-    }
-
-    pub fn floor(&self) -> PdNum {
-        match self {
-            PdNum::Int(_) => self.clone(),
-            PdNum::Char(_) => self.clone(),
-            PdNum::Float(f) => f.floor().to_bigint().map_or(self.clone(), PdNum::Int),
-        }
-    }
-
-    pub fn trunc(&self) -> PdNum {
-        match self {
-            PdNum::Int(_) => self.clone(),
-            PdNum::Char(_) => self.clone(),
-            PdNum::Float(f) => f.trunc().to_bigint().map_or(self.clone(), PdNum::Int),
-        }
-    }
+    forward_int_coercion!(ceil);
+    forward_int_coercion!(floor);
+    forward_int_coercion!(trunc);
+    forward_int_coercion!(round);
 
     pub fn abs(&self) -> PdNum {
         match self {

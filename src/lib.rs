@@ -2858,6 +2858,7 @@ pub fn initialize(env: &mut Environment) {
     let neg_case    = n_n![a, -a];
     let signum_case = n_n![a, a.signum()];
     let trunc_case  = n_n![a, a.trunc()];
+    let round_case  = n_n![a, a.round()];
     let equals_one_case = n_n![a, PdNum::iverson(a == &PdNum::from(1))];
     let positive_case = n_n![a, PdNum::iverson(a > &PdNum::from(0))];
     let negative_case = n_n![a, PdNum::iverson(a < &PdNum::from(0))];
@@ -3750,6 +3751,11 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("›", cc![ceil_case, hoard_last_case, last_case]);
     add_cases!("«", cc![dec2_case, butlast_case]);
     add_cases!("»", cc![inc2_case, rest_case]);
+    add_cases!("Floor", cc![floor_case], alias "<i");
+    add_cases!("Ceil",  cc![ceil_case],  alias ">i");
+    add_cases!("Round", cc![round_case], alias "=i");
+    add_cases!("(s", cc![butlast_case]);
+    add_cases!(")s", cc![rest_case]);
     add_cases!("×", cc![double_case]);
     add_cases!("½", cc![frac_12_case]);
     add_cases!("¼", cc![frac_14_case]);
