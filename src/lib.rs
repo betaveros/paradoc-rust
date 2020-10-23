@@ -132,14 +132,15 @@ impl Environment {
     }
 
     fn println(&mut self, msg: &str) {
+        let output_record_separator = self.get("N").map_or_else(|| "".to_string(), |x| self.to_string(x));
         match &mut self.shadow {
             Ok(inner) => inner.env.print(msg),
             Err(top) => match &mut top.output_buffer {
                 Some(buf) => {
                     buf.push_str(&msg);
-                    buf.push('\n')
+                    buf.push_str(&output_record_separator);
                 },
-                None => println!("{}", msg),
+                None => print!("{}{}", msg, output_record_separator),
             }
         }
     }
@@ -3709,6 +3710,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("Table", cc![cartesian_product_case, map_cartesian_product_case], alias "T");
     add_cases!("Div_or_split_or_each", cc![div_case, seq_split_case, str_split_by_case, seq_split_by_case, each_case], alias "/");
     add_cases!("%", cc![mod_case, mod_slice_case, map_case]);
+    add_cases!("Divmod", cc![divmod_case]);
+    add_cases!("Zip", cc![zip_as_list_case, zip_with_block_case]);
     add_cases!("Divmod_or_zip", cc![divmod_case, zip_as_list_case, zip_with_block_case], aliases ["%p", "‰"]);
     add_cases!("Power", cc![pow_case, cartesian_power_case], aliases ["*p", "ˆ"]);
     add_cases!("÷", cc![intdiv_case, seq_split_discarding_case]);
@@ -3890,19 +3893,22 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("!", cc![not_case]);
 
     let sum_case   : Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)?))]) });
-    add_cases!("Š", cc![sum_case]);
+    add_cases!("Sum", cc![sum_case], aliases ["+w", "Š"]);
 
     let product_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_product(a)?))]) });
-    add_cases!("Þ", cc![product_case]);
+    add_cases!("Product", cc![product_case], aliases ["*w", "Þ"]);
+
+    let deep_length_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![PdObj::from(pd_deep_length(a)?)]) });
+    add_cases!("Deep_length", cc![deep_length_case], alias "Dl");
 
     let average_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_sum(a)? / PdNum::Float(pd_deep_length(a)? as f64)))]) });
-    add_cases!("Av", cc![average_case]);
+    add_cases!("Average", cc![average_case], alias "Av");
 
     let hypotenuse_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_square_sum(a)?.sqrt().ok_or(PdError::NumericError("sqrt in hypotenuse failed"))?))]) });
-    add_cases!("Hy", cc![hypotenuse_case]);
+    add_cases!("Hypotenuse", cc![hypotenuse_case], alias "Hy");
 
     let standard_deviation_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![(PdObj::from(pd_deep_standard_deviation(a)?))]) });
-    add_cases!("Sg", cc![standard_deviation_case]);
+    add_cases!("Standard_deviation", cc![standard_deviation_case], alias "Sg");
 
     // FIXME
     let string_to_int_case: Rc<dyn Case> = Rc::new(UnaryCase {
@@ -4131,6 +4137,18 @@ pub fn initialize(env: &mut Environment) {
             let obj = env.run_stack_trigger().ok_or(PdError::InputError)?;
             env.push(obj);
             Ok(())
+        },
+    });
+    env.insert_builtin(" o", BuiltIn {
+        name: "Space_output".to_string(),
+        func: |env| {
+            env.print(" "); Ok(())
+        },
+    });
+    env.insert_builtin("\no", BuiltIn {
+        name: "Newline_output".to_string(),
+        func: |env| {
+            env.print("\n"); Ok(())
         },
     });
     env.insert_builtin("Q", BuiltIn {
