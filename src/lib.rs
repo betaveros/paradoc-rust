@@ -3978,7 +3978,7 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![pd_list(vu::replicate_clones(*n, a))])
         },
     });
-    add_cases!("°", cc![replicate_case]);
+    add_cases!("Replicate", cc![replicate_case], aliases ["Rp", "°"]);
 
     env.insert_builtin("H", Hoard::new());
     env.insert_builtin("•", Hoard::new());
@@ -4230,6 +4230,20 @@ pub fn initialize(env: &mut Environment) {
         },
         name: "swapcase".to_string(),
     });
+
+    macro_rules! char_predicate {
+        ($name:literal -> $fname:ident) => {
+            env.insert_builtin($name, DeepCharToIntOrZeroBlock {
+                func: |a| if a.$fname() { 1 } else { 0 },
+                name: stringify!($fname).to_string(),
+            });
+        }
+    }
+    char_predicate!("Ap" -> is_alphabetic);
+    char_predicate!("Dp" -> is_numeric);
+    char_predicate!("Lp" -> is_lowercase);
+    char_predicate!("Up" -> is_uppercase);
+    char_predicate!("Wp" -> is_whitespace);
     env.insert_builtin("Mc", DeepCharToCharBlock {
         func: |a| *char_info::MATCHING_MAP.get(&a).unwrap_or(&a),
         name: "matching_char".to_string(),
