@@ -1328,23 +1328,29 @@ impl Block for DeepNumToNumBlock {
     }
 }
 
-struct DeepBinaryOpBlock {
+struct BoundDeepZipBlock {
     func: fn(&PdNum, &PdNum) -> PdNum,
     other: PdNum,
+    trailer: String,
 }
-impl Debug for DeepBinaryOpBlock {
+impl Debug for BoundDeepZipBlock {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "DeepBinaryOpBlock {{ func: ???, other: {:?} }}", self.other)
+        write!(
+            fmt,
+           "BoundDeepZipBlock {{ func: ???, other: {:?}, trailer: {:?} }}",
+           self.other,
+           self.trailer,
+        )
     }
 }
-impl Block for DeepBinaryOpBlock {
+impl Block for BoundDeepZipBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
         let res = pd_deep_map(&|x| (self.func)(x, &self.other), &env.pop_result("deep binary op no stack")?);
         env.push(res);
         Ok(())
     }
     fn code_repr(&self) -> String {
-        self.other.to_string() + "_???_binary_op"
+        format!("{}{}", self.other.to_string(), self.trailer)
     }
 }
 
@@ -1881,6 +1887,14 @@ fn simple_interpolate<S>(env: &mut Environment, string: &Vec<char>) -> PdResult<
     })))
 }
 
+fn n_bdzb(trailer: &str, func: fn(&PdNum, &PdNum) -> PdNum, other: &PdNum) -> PdResult<(PdObj, bool)> {
+    Ok((PdObj::Block(Rc::new(BoundDeepZipBlock {
+        func,
+        other: PdNum::clone(other),
+        trailer: trailer.to_string(),
+    })), false))
+}
+
 fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trailer) -> PdResult<(PdObj, bool)> {
     let mut trailer: &str = trailer0.0.as_ref();
     trailer = trailer.strip_prefix('_').unwrap_or(trailer);
@@ -1890,10 +1904,16 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             "m" | "minus" => { Ok((PdObj::from(-&**n), false)) }
             "h" | "hundred" => { Ok((PdObj::from(n.mul_const(100)), false)) }
             "k" | "thousand" => { Ok((PdObj::from(n.mul_const(1000)), false)) }
-            "p" | "power" => {
-                let exponent: PdNum = PdNum::clone(n);
-                Ok(((PdObj::Block(Rc::new(DeepBinaryOpBlock { func: |a, b| a.pow_num(b), other: exponent }))), false))
-            }
+            "p" | "power" => n_bdzb("power", |a, b| a.pow_num(b), n),
+            "á" => n_bdzb("á", |a, b| a + b, n),
+            "à" => n_bdzb("à", |a, b| a - b, n),
+            "é" => Ok((PdObj::from(&**n * &**n), false)),
+            "è" => Ok((PdObj::from(PdNum::from(2).pow_num(n)), false)),
+            "ì" => Ok((PdObj::from(-&**n), false)),
+            "í" => Ok((PdObj::from(&PdNum::from(1)/n), false)),
+            "ó" => n_bdzb("ó", |a, b| a * b, n),
+            "ò" => n_bdzb("ò", |a, b| a / b, n),
+            "ú" => n_bdzb("ò", |a, b| a % b, n),
             // TODO maaaaybe look at the sign
             "d" | "digits" => match &**n {
                 PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
@@ -4175,6 +4195,12 @@ pub fn initialize(env: &mut Environment) {
         func: |a, b| a % b,
         name: "mod".to_string(),
     });
+    for (i, ch) in str_class("A-Z").chars().enumerate() {
+        for trailer in "áàéèíìóòú".chars() {
+            let (obj, _rel) = apply_trailer(env, &PdObj::from(10 + i), &lex::Trailer(trailer.to_string())).expect("Acute-grave construction failed in initialization!");
+            env.insert_builtin(&format!("{}{}", ch, trailer), obj);
+        }
+    }
 
     env.insert_builtin("±", DeepZipBlock {
         func: |a, b| (a - b).abs(),
