@@ -10,6 +10,7 @@ use std::fmt;
 use num_iter;
 use num::bigint::BigInt;
 use num::Integer;
+use num::complex::Complex64;
 use num_traits::cast::ToPrimitive;
 use num_traits::pow::Pow;
 use num_traits::identities::{Zero, One};
@@ -708,7 +709,7 @@ fn just_num(obj: &PdObj) -> Option<Rc<PdNum>> {
 }
 fn num_to_bigint(obj: &PdObj) -> Option<BigInt> {
     match obj {
-        PdObj::Num(n) => n.to_bigint(),
+        PdObj::Num(n) => n.trunc_to_bigint(),
         _ => None,
     }
 }
@@ -1905,6 +1906,7 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             "h" | "hundred" => { Ok((PdObj::from(n.mul_const(100)), false)) }
             "k" | "thousand" => { Ok((PdObj::from(n.mul_const(1000)), false)) }
             "p" | "power" => n_bdzb("power", |a, b| a.pow_num(b), n),
+            "j" | "imag" => Ok((PdObj::from(&**n * &PdNum::from(Complex64::new(0.0, 1.0))), false)),
             "á" => n_bdzb("á", |a, b| a + b, n),
             "à" => n_bdzb("à", |a, b| a - b, n),
             "é" => Ok((PdObj::from(&**n * &**n), false)),
@@ -2510,6 +2512,61 @@ fn pd_deep_product(x: &PdObj) -> PdResult<PdNum> {
     }
 }
 
+fn pd_deep_reduce_complex_iter(iter: impl Iterator<Item=PdObj>) -> PdResult<PdObj> {
+    let mut seq_accum: Vec<PdObj> = Vec::new();
+    let mut s = PdNum::from(Complex64::from(0.0));
+    let mut seen_scalar = false;
+    let j = PdNum::one_j();
+
+    for (i, obj) in iter.enumerate() {
+        match obj {
+            PdObj::Num(n) => {
+                if !seq_accum.is_empty() {
+                    return Err(PdError::BadArgument("Cannot mix scalars and sequences in reduce complex".to_string()));
+                }
+                s += &(&*n * &j.pow(i.to_u32().expect("really complex over u32?")));
+                seen_scalar = true;
+            }
+            PdObj::String(_) => {
+                if seen_scalar {
+                    return Err(PdError::BadArgument("Cannot mix scalars and sequences in reduce complex".to_string()));
+                }
+                seq_accum.push(pd_deep_reduce_complex(&obj)?);
+            }
+            PdObj::List(_) => {
+                if seen_scalar {
+                    return Err(PdError::BadArgument("Cannot mix scalars and sequences in reduce complex".to_string()));
+                }
+                seq_accum.push(pd_deep_reduce_complex(&obj)?);
+            }
+            PdObj::Hoard(_) => {
+                if seen_scalar {
+                    return Err(PdError::BadArgument("Cannot mix scalars and sequences in reduce complex".to_string()));
+                }
+                seq_accum.push(pd_deep_reduce_complex(&obj)?);
+            }
+            PdObj::Block(_) => {
+                return Err(PdError::BadArgument("deep reduce complex can't block".to_string()));
+            }
+        }
+    }
+    if seq_accum.is_empty() {
+        Ok(PdObj::from(PdNum::from(s)))
+    } else {
+        Ok(pd_list(seq_accum))
+    }
+}
+
+fn pd_deep_reduce_complex(x: &PdObj) -> PdResult<PdObj> {
+    match x {
+        PdObj::Num(_) => Err(PdError::BadArgument("deep reduce complex can't num".to_string())),
+        PdObj::String(ss) => pd_deep_reduce_complex_iter(ss.iter().map(|x| PdObj::from(*x))),
+        PdObj::List(v) => pd_deep_reduce_complex_iter(v.iter().cloned()),
+        PdObj::Hoard(h) => pd_deep_reduce_complex_iter(h.borrow().iter().cloned()),
+        PdObj::Block(_) => Err(PdError::BadArgument("deep reduce complex can't block".to_string())),
+    }
+}
+
 fn pd_build_if_string(x: Vec<PdNum>) -> PdObj {
     let mut chars: Vec<char> = Vec::new();
     let mut char_ok = true;
@@ -2854,6 +2911,9 @@ pub fn initialize(env: &mut Environment) {
     let mod_case = nn_n![a, b, a % b];
     let intdiv_case = nn_n![a, b, a.div_floor(b)];
     let pow_case = nn_n![a, b, a.pow_num(b)];
+
+    let plus_j_case  = nn_n![a, b, a + &(b * &PdNum::one_j())];
+    let minus_j_case = nn_n![a, b, a - &(b * &PdNum::one_j())];
 
     let shl_case = binary_num_case(|_, a, b| {
         Ok(vec![PdObj::from(a.shl_opt(&**b).ok_or(PdError::NumericError("bad left shift"))?)])
@@ -3369,8 +3429,8 @@ pub fn initialize(env: &mut Environment) {
         coerce2: just_num,
         func: |_, num0, base0| {
             // TODO maybe preserve Char/Intiness?
-            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
-            let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
+            let base = base0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
+            let num = num0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             Ok(vec![pd_list(base::to_base_digits(&base, num).ok_or(PdError::BadArgument("from base fail".to_string()))?.into_iter().map(|x| PdObj::from(x)).collect())])
         },
     });
@@ -3379,8 +3439,8 @@ pub fn initialize(env: &mut Environment) {
         coerce2: just_num,
         func: |_, num0, base0| {
             // TODO maybe preserve Char/Intiness?
-            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
-            let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
+            let base = base0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
+            let num = num0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             Ok(vec![PdObj::from(base::to_base_digits_upper::<Vec<char>>(&base, num).ok_or(PdError::BadArgument("from base fail".to_string()))?)])
         },
     });
@@ -3389,8 +3449,8 @@ pub fn initialize(env: &mut Environment) {
         coerce2: just_num,
         func: |_, num0, base0| {
             // TODO maybe preserve Char/Intiness?
-            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
-            let num = num0.to_bigint().ok_or(PdError::BadFloat)?;
+            let base = base0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
+            let num = num0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             Ok(vec![PdObj::from(base::to_base_digits_lower::<Vec<char>>(&base, num).ok_or(PdError::BadArgument("from base fail".to_string()))?)])
         },
     });
@@ -3399,11 +3459,11 @@ pub fn initialize(env: &mut Environment) {
         coerce2: just_num,
         func: |_, digits0, base0| {
             // TODO lol
-            let base = base0.to_bigint().ok_or(PdError::BadFloat)?;
+            let base = base0.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             let digits = digits0.iter().map(|x| match x {
                 PdObj::Num(num) => match &*num {
                     PdNum::Char(ch) => base::from_char_digit(ch).ok_or(PdError::BadArgument(format!("char can't be parsed as digit: {}", num))),
-                    _ => num.to_bigint().ok_or(PdError::BadFloat),
+                    _ => num.trunc_to_bigint().ok_or(PdError::BadFloat),
                 },
                 _ => Err(PdError::BadArgument("from base digits type fail".to_string())),
             }).collect::<PdResult<Vec<BigInt>>>()?;
@@ -3518,7 +3578,7 @@ pub fn initialize(env: &mut Environment) {
     let range_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_num,
         func: |_, num| {
-            let n = num.to_bigint().ok_or(PdError::BadFloat)?;
+            let n = num.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             let vs = num_iter::range(BigInt::zero(), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![(PdObj::List(Rc::new(vs)))])
         },
@@ -3526,7 +3586,7 @@ pub fn initialize(env: &mut Environment) {
     let one_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_num,
         func: |_, num| {
-            let n = num.to_bigint().ok_or(PdError::BadFloat)?;
+            let n = num.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             let vs = num_iter::range_inclusive(BigInt::zero(), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
@@ -3534,7 +3594,7 @@ pub fn initialize(env: &mut Environment) {
     let down_one_range_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_num,
         func: |_, num| {
-            let n = num.to_bigint().ok_or(PdError::BadFloat)?;
+            let n = num.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             let vs = num_iter::range_inclusive(BigInt::one(), n).rev().map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
@@ -3562,8 +3622,8 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_num,
         coerce2: just_num,
         func: |_, num1, num2| {
-            let n1 = num1.to_bigint().ok_or(PdError::BadFloat)?;
-            let n2 = num2.to_bigint().ok_or(PdError::BadFloat)?;
+            let n1 = num1.trunc_to_bigint().ok_or(PdError::BadFloat)?;
+            let n2 = num2.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             let vs = num_iter::range(n1, n2).map(|x| PdObj::from(num1.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
@@ -3572,8 +3632,8 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_num,
         coerce2: just_num,
         func: |_, num1, num2| {
-            let n1 = num1.to_bigint().ok_or(PdError::BadFloat)?;
-            let n2 = num2.to_bigint().ok_or(PdError::BadFloat)?;
+            let n1 = num1.trunc_to_bigint().ok_or(PdError::BadFloat)?;
+            let n2 = num2.trunc_to_bigint().ok_or(PdError::BadFloat)?;
             let vs = num_iter::range_inclusive(n1, n2).map(|x| PdObj::from(num1.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
@@ -3584,7 +3644,7 @@ pub fn initialize(env: &mut Environment) {
         func: |_, obj| {
             // TODO: should we propagate char-ness?
             let n = match obj {
-                PdObj::Num(num) => num.to_bigint().ok_or(PdError::BadFloat)?,
+                PdObj::Num(num) => num.trunc_to_bigint().ok_or(PdError::BadFloat)?,
                 PdObj::List(lst) => BigInt::from(lst.len()),
                 PdObj::String(s) => BigInt::from(s.len()),
                 PdObj::Hoard(h) => BigInt::from(h.borrow().len()),
@@ -3968,7 +4028,7 @@ pub fn initialize(env: &mut Environment) {
     });
     add_cases!("Ig", cc![int_groups_case]);
 
-    let to_float_case: Rc<dyn Case> = n_n![a, a.to_f64_or_inf()];
+    let to_float_case: Rc<dyn Case> = n_n![a, a.to_f64_re_or_inf()];
     let string_to_float_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
         func: |_, s: &Rc<Vec<char>>| Ok(vec![PdObj::from(s.iter().collect::<String>().parse::<f64>().map_err(|_| PdError::BadParse)?)]),
@@ -4237,6 +4297,56 @@ pub fn initialize(env: &mut Environment) {
     forward_f64!("Ln", ln);
     forward_f64!("Lt", log10);
     forward_f64!("Lg", log2);
+
+    let complex_components_case: Rc<dyn Case> = unary_num_case(|_, a| {
+        Ok(vec![PdObj::from(a.real_part()), PdObj::from(a.imaginary_part())])
+    });
+    add_cases!("Complex_components", cc![complex_components_case], alias "~j");
+    let complex_components_array_case: Rc<dyn Case> = unary_num_case(|_, a| {
+        Ok(vec![pd_list(vec![PdObj::from(a.real_part()), PdObj::from(a.imaginary_part())])])
+    });
+    add_cases!("Complex_components_array", cc![complex_components_array_case], alias "Aj");
+    let reduce_complex_case: Rc<dyn Case> = Rc::new(UnaryAnyCase { func: |_, a| Ok(vec![pd_deep_reduce_complex(a)?]) });
+    add_cases!("Reduce_complex", cc![reduce_complex_case], alias "Rj");
+
+    add_cases!("+j", cc![plus_j_case]);
+    add_cases!("-j", cc![minus_j_case]);
+    env.insert_builtin(";j", DeepNumToNumBlock {
+        func: |a| a.imaginary_part(),
+        name: "imaginary_part".to_string(),
+    });
+    env.insert_builtin("*j", DeepNumToNumBlock {
+        func: |a| a * &PdNum::one_j(),
+        name: "multiply_j".to_string(),
+    });
+    env.insert_builtin("/j", DeepNumToNumBlock {
+        func: |a| a * &-PdNum::one_j(),
+        name: "divide_j".to_string(),
+    });
+    env.insert_builtin("\\j", DeepNumToNumBlock {
+        func: |a| a.swap_real_and_imaginary(),
+        name: "divide_j".to_string(),
+    });
+    env.insert_builtin("Mj", DeepNumToNumBlock {
+        func: |a| a.conjugate(),
+        name: "conjugate".to_string(),
+    });
+    env.insert_builtin("|j", DeepNumToNumBlock {
+        func: |a| -a.conjugate(),
+        name: "negate_real".to_string(),
+    });
+    env.insert_builtin("^j", DeepNumToNumBlock {
+        func: |a| PdNum::one_j().pow_num(a),
+        name: "imaginary_unit_power".to_string(),
+    });
+    env.insert_builtin("!j", DeepNumToNumBlock {
+        func: |a| PdNum::iverson(a.is_pure_real()),
+        name: "not_imaginary".to_string(),
+    });
+    env.insert_builtin("?j", DeepNumToNumBlock {
+        func: |a| PdNum::iverson(a.is_pure_imaginary()),
+        name: "not_imaginary".to_string(),
+    });
 
     env.insert_builtin("Uc", DeepCharToCharBlock {
         func: |a| a.to_uppercase().next().expect("uppercase :("), // FIXME uppercasing chars can produce more than one!
