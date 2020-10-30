@@ -2,6 +2,7 @@ use std::rc::Rc;
 // use num::bigint::BigInt;
 extern crate paradoc;
 use paradoc::PdObj;
+use num::complex::Complex64;
 
 fn int(x: i32) -> PdObj {
     PdObj::from(x)
@@ -38,12 +39,15 @@ fn basic() {
 }
 
 #[test]
-fn math() {
+fn math_arithmetic() {
     assert_eq!(paradoc::simple_eval("3 4+"), intvec![7]);
     assert_eq!(paradoc::simple_eval("3 4-"), intvec![-1]);
     assert_eq!(paradoc::simple_eval("3 4*"), intvec![12]);
     assert_eq!(paradoc::simple_eval("3 4/"), vec![PdObj::from(0.75f64)]);
+}
 
+#[test]
+fn math_binary_operations() {
     assert_eq!(paradoc::simple_eval("3 5&"), intvec![1]);
     assert_eq!(paradoc::simple_eval("3 5|"), intvec![7]);
     assert_eq!(paradoc::simple_eval("3 5^"), intvec![6]);
@@ -53,6 +57,14 @@ fn math() {
     assert_eq!(paradoc::simple_eval("253 492^"), intvec![273]);
     assert_eq!(paradoc::simple_eval("253 3<s"), intvec![2024]);
     assert_eq!(paradoc::simple_eval("253 3>s"), intvec![31]);
+}
+
+#[test]
+fn math_complex() {
+    assert_eq!(paradoc::simple_eval("1j 1j*"), vec![PdObj::from(Complex64::from(-1.0))]);
+    assert_eq!(paradoc::simple_eval("3 4+j"), vec![PdObj::from(Complex64::new(3.0, 4.0))]);
+    assert_eq!(paradoc::simple_eval("[3 4]Rj"), vec![PdObj::from(Complex64::new(3.0, 4.0))]);
+    assert_eq!(paradoc::simple_eval("3 4j+Aj"), vec![list(vec![PdObj::from(3.0), PdObj::from(4.0)])]);
 }
 
 #[test]

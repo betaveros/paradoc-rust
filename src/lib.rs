@@ -590,6 +590,7 @@ forward_from!(char);
 forward_from!(i32);
 forward_from!(f64);
 forward_from!(usize);
+forward_from!(Complex64);
 
 impl From<Vec<char>> for PdObj {
     fn from(s: Vec<char>) -> Self {
