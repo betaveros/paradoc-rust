@@ -59,11 +59,53 @@ impl From<Complex64> for PdNum {
     fn from(z: Complex64) -> Self { PdNum::Complex(z) }
 }
 
+trait PowIF: Sized {
+    fn powi(self, n: i32) -> Self;
+    fn powf(self, f: f64) -> Self;
+    fn powif(self, b: &BigInt) -> Self {
+        match b.to_i32() {
+            Some(ib) => self.powi(ib),
+            None => self.powf(bigint_to_f64_or_inf(b)),
+        }
+    }
+}
+impl PowIF for f64 {
+    fn powi(self, n: i32) -> f64 { f64::powi(self, n) }
+    fn powf(self, f: f64) -> f64 { f64::powf(self, f) }
+}
+impl PowIF for Complex64 {
+    fn powi(self, n: i32) -> Complex64 { Complex64::powi(&self, n) }
+    fn powf(self, f: f64) -> Complex64 { Complex64::powf(self, f) }
+}
+
+fn powf_pdnum(a: f64, b: f64) -> PdNum {
+    let fx = a.powf(b);
+    if fx.is_nan() {
+        let zx = Complex64::from(a).powf(b);
+        if !zx.re.is_nan() && !zx.im.is_nan() {
+            return PdNum::from(zx)
+        }
+    }
+    PdNum::from(fx)
+}
+
+fn powif_pdnum(a: f64, b: &BigInt) -> PdNum {
+    let fx = a.powif(b);
+    if fx.is_nan() {
+        let zx = Complex64::from(a).powif(b);
+        if !zx.re.is_nan() && !zx.im.is_nan() {
+            return PdNum::from(zx)
+        }
+    }
+    PdNum::from(fx)
+}
+
+
 fn pow_big_ints(a: &BigInt, b: &BigInt) -> PdNum {
     match b.sign() {
         num::bigint::Sign::NoSign => PdNum::from(0),
         num::bigint::Sign::Plus => PdNum::from(Pow::pow(a, b.magnitude())),
-        num::bigint::Sign::Minus => PdNum::from(a.to_f64().expect("exponent c'mon").pow(b.to_f64().expect("exponent c'mon"))),
+        num::bigint::Sign::Minus => PdNum::from(powif_pdnum(bigint_to_f64_or_inf(a), b)),
     }
 }
 
@@ -294,30 +336,21 @@ impl PdNum {
     }
 
     pub fn pow_num(&self, other: &PdNum) -> PdNum {
-        macro_rules! powi_or_powf {
-            ($a:expr, $b:expr) => {
-                match $b.to_i32() {
-                    Some(ib) => PdNum::from($a.powi(ib)),
-                    None => PdNum::from($a.powf(bigint_to_f64_or_inf($b))),
-                }
-            };
-        }
-
         match (self, other) {
             (PdNum::Int   (a), PdNum::Int   (b)) => pow_big_ints(a, b),
-            (PdNum::Int   (a), PdNum::Float (b)) => PdNum::from(a.to_f64().expect("pow pls").pow(b)),
+            (PdNum::Int   (a), PdNum::Float (b)) => powf_pdnum(bigint_to_f64_or_inf(a), *b),
             (PdNum::Int   (a), PdNum::Char  (b)) => pow_big_ints(a, b),
             (PdNum::Char  (a), PdNum::Int   (b)) => pow_big_ints(a, b),
-            (PdNum::Char  (a), PdNum::Float (b)) => PdNum::from(a.to_f64().expect("pow pls").pow(b)),
+            (PdNum::Char  (a), PdNum::Float (b)) => powf_pdnum(bigint_to_f64_or_inf(a), *b),
             (PdNum::Char  (a), PdNum::Char  (b)) => pow_big_ints(a, b),
 
-            (PdNum::Float (a),  PdNum::Float(b)) => PdNum::from(a.pow(b)),
+            (PdNum::Float (a),  PdNum::Float(b)) => powf_pdnum(*a, *b),
             (PdNum::Complex(a), PdNum::Float(b)) => PdNum::from(a.powf(*b)),
 
-            (PdNum::Float  (a), PdNum::Int (b)) => powi_or_powf!(a, b),
-            (PdNum::Float  (a), PdNum::Char(b)) => powi_or_powf!(a, b),
-            (PdNum::Complex(a), PdNum::Int (b)) => powi_or_powf!(a, b),
-            (PdNum::Complex(a), PdNum::Char(b)) => powi_or_powf!(a, b),
+            (PdNum::Float  (a), PdNum::Int (b)) => powif_pdnum(*a, b),
+            (PdNum::Float  (a), PdNum::Char(b)) => powif_pdnum(*a, b),
+            (PdNum::Complex(a), PdNum::Int (b)) => PdNum::from(a.powif(b)),
+            (PdNum::Complex(a), PdNum::Char(b)) => PdNum::from(a.powif(b)),
 
             (a, PdNum::Complex(zb)) => PdNum::Complex(a.to_complex_or_inf().pow(zb)),
         }
