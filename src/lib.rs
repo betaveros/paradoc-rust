@@ -1321,7 +1321,7 @@ impl Debug for DeepNumToNumBlock {
 impl Block for DeepNumToNumBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
         let a = env.pop_result("deep num to num no stack")?;
-        let res = pd_deep_map(&self.func, &a);
+        let res = pd_deep_map(&self.func, &a)?;
         env.push(res);
         Ok(())
     }
@@ -1347,7 +1347,7 @@ impl Debug for BoundDeepZipBlock {
 }
 impl Block for BoundDeepZipBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
-        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &env.pop_result("deep binary op no stack")?);
+        let res = pd_deep_map(&|x| (self.func)(x, &self.other), &env.pop_result("deep binary op no stack")?)?;
         env.push(res);
         Ok(())
     }
@@ -1369,7 +1369,7 @@ impl Block for DeepZipBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
         let b = env.pop_result("deep zip no stack")?;
         let a = env.pop_result("deep zip no stack")?;
-        let res = pd_deep_zip(&self.func, &a, &b);
+        let res = pd_deep_zip(&self.func, &a, &b)?;
         env.push(res);
         Ok(())
     }
@@ -1390,7 +1390,7 @@ impl Debug for DeepCharToCharBlock {
 impl Block for DeepCharToCharBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
         let a = env.pop_result("deep char to char no stack")?;
-        let res = pd_deep_char_to_char(&self.func, &a);
+        let res = pd_deep_char_to_char(&self.func, &a)?;
         env.push(res);
         Ok(())
     }
@@ -1411,7 +1411,7 @@ impl Debug for DeepCharToIntOrZeroBlock {
 impl Block for DeepCharToIntOrZeroBlock {
     fn run(&self, env: &mut Environment) -> PdUnit {
         let a = env.pop_result("deep char to int|0 no stack")?;
-        let res = pd_deep_char_to_int_or_zero(&self.func, &a);
+        let res = pd_deep_char_to_int_or_zero(&self.func, &a)?;
         env.push(res);
         Ok(())
     }
@@ -2310,7 +2310,7 @@ impl Block for CodeBlock {
                 "a" | "linearray"   => { env.set_input_trigger(Some(InputTrigger::AllLines  )); }
                 "y" | "valuearray"  => { env.set_input_trigger(Some(InputTrigger::AllValues )); }
                 "q" | "recordarray" => { env.set_input_trigger(Some(InputTrigger::AllRecords)); }
-                _ => { panic!("unsupported init trailer"); }
+                t => { return Err(PdError::InapplicableTrailer(format!("Unsupported init trailer {}", t))); }
             }
         }
 
@@ -2330,7 +2330,7 @@ impl Block for CodeBlock {
                         };
                         env.insert(var_name, obj);
                     } else {
-                        panic!("can't assign to non-var :(");
+                        return Err(PdError::BadAssignment(format!("Can't assign to non-var {:?}", leader)));
                     }
                     active_assign = None;
                 }
@@ -2357,7 +2357,7 @@ impl Block for CodeBlock {
                     }
                     RcLeader::Assign(aty) => {
                         if active_assign.is_some() {
-                            panic!("what???");
+                            return Err(PdError::BadAssignment("Can't assign to assignment operator!?".to_string()));
                         }
                         active_assign = Some(*aty);
                     }
@@ -2585,14 +2585,14 @@ fn pd_build_if_string(x: Vec<PdNum>) -> PdObj {
 }
 
 // note to self: you do need to borrow f because of recursion
-fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdObj
+fn pd_deep_map<F>(f: &F, x: &PdObj) -> PdResult<PdObj>
     where F: Fn(&PdNum) -> PdNum {
 
     match x {
-        PdObj::Num(n) => PdObj::Num(Rc::new(f(n))),
-        PdObj::String(s) => pd_build_if_string(s.iter().map(|c| f(&PdNum::from(*c))).collect()),
-        PdObj::List(x) => PdObj::List(Rc::new(x.iter().map(|e| pd_deep_map(f, e)).collect())),
-        _ => { panic!("wtf not deep"); }
+        PdObj::Num(n) => Ok(PdObj::Num(Rc::new(f(n)))),
+        PdObj::String(s) => Ok(pd_build_if_string(s.iter().map(|c| f(&PdNum::from(*c))).collect())),
+        PdObj::List(x) => Ok(PdObj::List(Rc::new(x.iter().map(|e| pd_deep_map(f, e)).collect::<PdResult<Vec<PdObj>>>()?))),
+        _ => Err(PdError::BadArgument(format!("Cannot deep map over {}", x)))
     }
 }
 
@@ -2621,27 +2621,27 @@ fn pd_deep_map_block(env: &mut Environment, func: &Rc<dyn Block>, x: PdObj) -> P
 
             Ok(vec![PdObj::List(Rc::new(acc))])
         }
-        _ => { panic!("wtf not deep"); }
+        _ => Err(PdError::BadArgument(format!("Cannot deep map over {}", x)),)
     }
 }
 
 
-fn pd_deep_zip<F>(f: &F, a: &PdObj, b: &PdObj) -> PdObj
+fn pd_deep_zip<F>(f: &F, a: &PdObj, b: &PdObj) -> PdResult<PdObj>
     where F: Fn(&PdNum, &PdNum) -> PdNum {
 
     if let (PdObj::Num(na), PdObj::Num(nb)) = (a, b) {
-        PdObj::Num(Rc::new(f(na, nb)))
+        Ok(PdObj::Num(Rc::new(f(na, nb))))
     } else if let (Some(sa), Some(sb)) = (seq_num_singleton(a), seq_num_singleton(b)) {
-        pd_build_like(
+        Ok(pd_build_like(
             sa.build_type() & sb.build_type(),
-            sa.iter().zip(sb.iter()).map(|(ea, eb)| pd_deep_zip(f, &ea, &eb)).collect()
-        )
+            sa.iter().zip(sb.iter()).map(|(ea, eb)| pd_deep_zip(f, &ea, &eb)).collect::<PdResult<Vec<PdObj>>>()?
+        ))
     } else {
-        panic!("wtf not deep");
+        Err(PdError::BadArgument(format!("Cannot deep zip over {} and {}", a, b)))
     }
 }
 
-fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdObj
+fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdResult<PdObj>
     where F: Fn(char) -> char {
 
     pd_deep_map(&|num: &PdNum| {
@@ -2649,7 +2649,7 @@ fn pd_deep_char_to_char<F>(f: &F, a: &PdObj) -> PdObj
     }, a)
 }
 
-fn pd_deep_char_to_int_or_zero<F>(f: &F, a: &PdObj) -> PdObj
+fn pd_deep_char_to_int_or_zero<F>(f: &F, a: &PdObj) -> PdResult<PdObj>
     where F: Fn(char) -> i32 {
 
     pd_deep_map(&|num: &PdNum| {

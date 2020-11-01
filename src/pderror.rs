@@ -10,6 +10,7 @@ pub enum PdError {
     IndexError(String),
     EmptyResult(String),
     AssertError(String),
+    BadAssignment(String),
     InputError,
     BadComparison,
     BadParse,
