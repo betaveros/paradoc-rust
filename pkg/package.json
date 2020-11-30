@@ -1,0 +1,15 @@
+{
+  "name": "paradoc",
+  "collaborators": [
+    "Brian Chen <brian.chxn@gmail.com>"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "paradoc_bg.wasm",
+    "paradoc.js",
+    "paradoc.d.ts"
+  ],
+  "module": "paradoc.js",
+  "types": "paradoc.d.ts",
+  "sideEffects": "false"
+}
