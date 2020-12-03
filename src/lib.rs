@@ -893,6 +893,10 @@ impl PdSeq {
         }
     }
 
+    fn cyclic_index(&self, i: isize) -> Option<PdSeqElement> {
+        self.index(i.rem_euclid(self.len() as isize) as usize)
+    }
+
     fn pythonic_clamp_slice_index(&self, index: isize) -> usize {
         let len = self.len();
         if 0 <= index {
@@ -3224,6 +3228,13 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![seq.pythonic_split_right(*index).to_rc_pd_obj()])
         },
     });
+    let cyclic_index_case: Rc<dyn Case> = Rc::new(BinaryCase {
+        coerce1: seq_range,
+        coerce2: num_to_isize,
+        func: |_, seq, index| {
+            Ok(vec![seq.cyclic_index(*index).ok_or(PdError::IndexError(index.to_string()))?.to_rc_pd_obj()])
+        },
+    });
     let cycle_left_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_range,
         coerce2: num_to_bigint,
@@ -3832,6 +3843,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
     add_cases!("<", cc![lt_case, lt_slice_case, take_while_case]);
     add_cases!(">", cc![gt_case, ge_slice_case, drop_while_case]);
+    add_cases!("=c", cc![cyclic_index_case]);
     add_cases!("<c", cc![cycle_left_case]);
     add_cases!(">c", cc![cycle_right_case]);
     add_cases!("<o", cc![cycle_left_one_case]);
