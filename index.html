@@ -19,6 +19,9 @@ textarea {
 #error {
 	color: #c00;
 }
+#outer-output, #url {
+	display: none;
+}
 </style>
 </head>
 <body>
@@ -31,11 +34,14 @@ You can read the <a href="https://betaveros.github.io/paradoc/">Paradoc document
 <p>Input:</p>
 <textarea id="input"></textarea>
 <button id="run" type="button" role="button" disabled>Loading...</button>
+<div id="outer-output">
 <p>Output:</p>
 <div id="output"></div>
 <p>Error:</p>
 <div id="error"></div>
-
+</div>
+<button id="gen-url" type="button" role="button">Generate URL</button>
+<textarea id="url"></textarea>
 <script type="module">
 // https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html (???)
 // wasm-pack build --target web
@@ -45,18 +51,49 @@ async function prepare() {
 	await init();
 	const code = document.getElementById('code');
 	const input = document.getElementById('input');
+	const outerOutput = document.getElementById('outer-output');
 	const output = document.getElementById('output');
 	const error = document.getElementById('error');
 	const runner = document.getElementById('run');
 	runner.addEventListener('click', function() {
 		const outs = encapsulated_eval(code.value, input.value);
+		outerOutput.style.display = 'block';
 		output.textContent = outs.get_output();
 		error.textContent = outs.get_error();
 	});
 	runner.disabled = false;
 	runner.textContent = "Run!";
 }
-prepare();
+
+function b64encode(s) {
+	const carr = [];
+	new TextEncoder().encode(s).forEach(function(u8) {
+		carr.push(String.fromCharCode(u8));
+	});
+	return btoa(carr.join(""));
+}
+function b64decode(s) {
+	const bs = atob(s);
+	const uarr = new Uint8Array(bs.length);
+	for (let i = 0; i < bs.length; i++) {
+		uarr[i] = bs.charCodeAt(i);
+	}
+	return new TextDecoder().decode(uarr);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+	var base64 = location.hash.substr(1);
+	const code = document.getElementById('code');
+	const urlElem = document.getElementById('url');
+	if (base64.length) {
+		code.value = b64decode(base64);
+	}
+	prepare();
+	document.getElementById('gen-url').addEventListener('click', function() {
+		urlElem.value = location.protocol + '//' + location.host + location.pathname + '#' + b64encode(code.value);
+		urlElem.style.display = 'block';
+	});
+});
 </script>
 </body>
 </html>
