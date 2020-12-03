@@ -304,3 +304,11 @@ fn type_predicates() {
         ]]
     )
 }
+
+#[test]
+fn encaps_eol() {
+    assert_eq!(
+        paradoc::encapsulated_eval("yL", "x").get_output(),
+        "1".to_string()
+    )
+}

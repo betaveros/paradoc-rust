@@ -75,7 +75,7 @@ impl EOFReader {
     }
 
     fn read_u8(&mut self) -> io::Result<Option<u8>> {
-        if self.eof { panic!("EOFRead internal shouldn't have called read_char after eof"); }
+        if self.eof { panic!("EOFRead internal shouldn't have called read_u8 after eof"); }
 
         let mut buffer = [0];
         let read_count = self.reader.read(&mut buffer)?;
@@ -90,12 +90,15 @@ impl EOFReader {
         if self.eof { panic!("EOFRead internal shouldn't have called read_word after eof"); }
 
         let mut vec = Vec::new();
+        // Read until we get a non-space or EOF
         let mut bb: Option<u8> = self.read_u8()?;
         while bb.map_or(false, is_u8_space) {
             bb = self.read_u8()?;
         }
-        if bb.is_none() { return Ok(None) }
+        if bb.is_none() { self.eof = true; return Ok(None) }
+        // bb is now the first non-space
 
+        // Append to vec and read until we get a space or EOF
         while let Some(b) = bb.filter(|b| !is_u8_space(*b)) {
             vec.push(b);
             bb = self.read_u8()?;
@@ -140,6 +143,7 @@ impl EOFReader {
                 let mut vec = Vec::new();
                 while let Some(s) = self.read_line()? {
                     vec.push(ReadValue::String(s));
+                    if self.eof { break }
                 }
                 Ok(Some(ReadValue::List(vec)))
             }
@@ -147,6 +151,7 @@ impl EOFReader {
                 let mut vec = Vec::new();
                 while let Some(v) = self.read_value()? {
                     vec.push(v);
+                    if self.eof { break }
                 }
                 Ok(Some(ReadValue::List(vec)))
             }
@@ -154,6 +159,7 @@ impl EOFReader {
                 let mut vec = Vec::new();
                 while let Some(v) = self.read_record()? {
                     vec.push(v);
+                    if self.eof { break }
                 }
                 Ok(Some(ReadValue::List(vec)))
             }
