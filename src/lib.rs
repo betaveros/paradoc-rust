@@ -1901,12 +1901,26 @@ fn n_bdzb(trailer: &str, func: fn(&PdNum, &PdNum) -> PdNum, other: &PdNum) -> Pd
     })), false))
 }
 
+#[derive(Debug)]
+struct ConstBlock {
+    const_object: PdObj,
+}
+impl Block for ConstBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        env.push(PdObj::clone(&self.const_object)); Ok(())
+    }
+    fn code_repr(&self) -> String {
+        format!("{}_", self.const_object)
+    }
+}
+
 fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trailer) -> PdResult<(PdObj, bool)> {
     let mut trailer: &str = trailer0.0.as_ref();
     trailer = trailer.strip_prefix('_').unwrap_or(trailer);
 
     match obj {
         PdObj::Num(n) => match trailer {
+            "" => { Ok((PdObj::from(ConstBlock { const_object: PdObj::clone(obj) }), true)) }
             "m" | "minus" => { Ok((PdObj::from(-&**n), false)) }
             "h" | "hundred" => { Ok((PdObj::from(n.mul_const(100)), false)) }
             "k" | "thousand" => { Ok((PdObj::from(n.mul_const(1000)), false)) }
