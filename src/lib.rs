@@ -4077,7 +4077,7 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("•", Hoard::new());
 
     // env.variables.insert("X".to_string(), (PdObj::Int(3.to_bigint().unwrap())));
-    env.insert_builtin("N", '\n');
+    env.insert_builtin("N", "\n");
     env.insert_builtin("A", 10);
     env.insert_builtin("¹", 11);
     env.insert_builtin("∅", 0);
