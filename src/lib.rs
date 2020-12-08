@@ -2649,7 +2649,17 @@ fn pd_deep_zip<F>(f: &F, a: &PdObj, b: &PdObj) -> PdResult<PdObj>
 
     if let (PdObj::Num(na), PdObj::Num(nb)) = (a, b) {
         Ok(PdObj::Num(Rc::new(f(na, nb))))
-    } else if let (Some(sa), Some(sb)) = (seq_num_singleton(a), seq_num_singleton(b)) {
+    } else if let (PdObj::Num(_), Some(sb)) = (a, just_seq(b)) {
+        Ok(pd_build_like(
+            sb.build_type(),
+            sb.iter().map(|eb| pd_deep_zip(f, a, &eb)).collect::<PdResult<Vec<PdObj>>>()?
+        ))
+    } else if let (Some(sa), PdObj::Num(_)) = (just_seq(a), b) {
+        Ok(pd_build_like(
+            sa.build_type(),
+            sa.iter().map(|ea| pd_deep_zip(f, &ea, b)).collect::<PdResult<Vec<PdObj>>>()?
+        ))
+    } else if let (Some(sa), Some(sb)) = (just_seq(a), just_seq(b)) {
         Ok(pd_build_like(
             sa.build_type() & sb.build_type(),
             sa.iter().zip(sb.iter()).map(|(ea, eb)| pd_deep_zip(f, &ea, &eb)).collect::<PdResult<Vec<PdObj>>>()?
