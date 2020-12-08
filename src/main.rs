@@ -2,6 +2,7 @@ use std::io;
 use std::fs::File;
 use std::io::{Read, Write};
 use paradoc::Block;
+use paradoc::pderror::PdError;
 
 fn prompt(input: &mut String) -> bool {
     input.clear();
@@ -49,11 +50,10 @@ fn main() {
                     paradoc::initialize(&mut env);
 
                     match block.run(&mut env) {
-                        Ok(()) => {},
+                        Ok(()) => { println!("{}", env.stack_to_string()) }
+                        Err(PdError::Exit) => {}
                         Err(e) => { println!("ERROR: {:?}", e); }
                     }
-
-                    println!("{}", env.stack_to_string());
                 }
                 Err(_) => {
                     panic!("opening code file failed");

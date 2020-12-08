@@ -23,7 +23,7 @@ use wasm_bindgen::prelude::*;
 
 mod lex;
 mod pdnum;
-mod pderror;
+pub mod pderror;
 mod input;
 mod slice_util;
 mod string_util;
@@ -2277,6 +2277,11 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(pd_list(keys.iter().map(|k| hoard.borrow().get(&k).map_or(PdObj::from(0), PdObj::clone)).collect()));
                 Ok(())
             }),
+            "j" | "eject" => hb("eject", hh, |env, hoard| {
+                env.push(pd_list(hoard.borrow().iter().cloned().collect()));
+                hoard.borrow_mut().replace_vec(Vec::new());
+                Ok(())
+            }),
 
             _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
         }
@@ -4246,6 +4251,7 @@ pub fn initialize(env: &mut Environment) {
     }, aliases ["\no", "\\no"]);
     add_builtin!("Break",    |_| Err(PdError::Break),    alias "Q");
     add_builtin!("Continue", |_| Err(PdError::Continue), alias "K");
+    add_builtin!("Exit",     |_| Err(PdError::Exit),     alias "E");
     add_builtin!("If_else", |env| {
         let else_branch = env.pop_result("If_else else failed")?;
         let if_branch   = env.pop_result("If_else if failed")?;
@@ -4476,9 +4482,10 @@ pub fn encapsulated_eval(code: &str, input: &str) -> WasmOutputs {
 
     let block = CodeBlock::parse(code);
 
-    let end_error = match block.run(&mut env) {
-        Ok(()) => String::new(),
-        Err(e) => format!("{:?}\n", e),
+    let (end_error, graceful) = match block.run(&mut env) {
+        Ok(()) => (String::new(), true),
+        Err(PdError::Exit) => (String::new(), false),
+        Err(e) => (format!("{:?}\n", e), false),
     };
 
     let (out, err) = match env.get_output_buffers() {
@@ -4487,7 +4494,11 @@ pub fn encapsulated_eval(code: &str, input: &str) -> WasmOutputs {
     };
 
     WasmOutputs {
-        output: format!("{}{}", out, env.stack_to_string()),
+        output: if graceful {
+            format!("{}{}", out, env.stack_to_string())
+        } else {
+            out.to_string()
+        },
         error: format!("{}{}", err, end_error),
     }
 }

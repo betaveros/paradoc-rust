@@ -19,6 +19,7 @@ pub enum PdError {
     InvalidHoardOperation,
     Break,
     Continue,
+    Exit,
 }
 
 pub type PdResult<T> = Result<T, PdError>;
