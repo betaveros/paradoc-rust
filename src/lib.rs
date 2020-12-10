@@ -135,7 +135,7 @@ impl Environment {
     fn println(&mut self, msg: &str) {
         let output_record_separator = self.get("N").map_or_else(|| "".to_string(), |x| self.to_string(x));
         match &mut self.shadow {
-            Ok(inner) => inner.env.print(msg),
+            Ok(inner) => inner.env.println(msg),
             Err(top) => match &mut top.output_buffer {
                 Some(buf) => {
                     buf.push_str(&msg);
@@ -935,6 +935,26 @@ impl PdSeq {
             PdSeq::String(s) => PdSeq::String(Rc::new(s.split_at(uindex).1.to_vec())),
             PdSeq::Range(a, b) => PdSeq::Range(a + uindex, BigInt::clone(b)),
         }
+    }
+
+    fn left_slices(&self, with_empty: bool) -> Vec<PdSeq> {
+        let start: usize = if with_empty { 0 } else { 1 };
+        (start..=self.len()).map(|i| self.pythonic_split_left(i as isize)).collect()
+    }
+
+    fn right_slices(&self, with_empty: bool) -> Vec<PdSeq> {
+        // careful with underflowing from 0 so we use exclusive
+        let end: usize = self.len() + if with_empty { 1 } else { 0 };
+        (0..end).rev().map(|i| self.pythonic_split_right(i as isize)).collect()
+    }
+
+    fn all_slices(&self) -> Vec<PdSeq> {
+        (0..self.len()).flat_map(|start| {
+            let suffix = self.pythonic_split_right(start as isize);
+            (1..=(self.len() - start)).map(move |len| {
+                suffix.pythonic_split_left(len as isize)
+            })
+        }).collect()
     }
 
     fn pythonic_mod_slice(&self, modulus: isize) -> PdResult<PdSeq> {
@@ -3297,6 +3317,36 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![a.repeat(*n).to_rc_pd_obj()])
         },
     });
+    let left_slices_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.left_slices(false).into_iter().map(|e| e.to_rc_pd_obj()).collect())])
+        },
+    });
+    let right_slices_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.right_slices(false).into_iter().map(|e| e.to_rc_pd_obj()).collect())])
+        },
+    });
+    let all_slices_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.all_slices().into_iter().map(|e| e.to_rc_pd_obj()).collect())])
+        },
+    });
+    let from_empty_left_slices_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.left_slices(true).into_iter().map(|e| e.to_rc_pd_obj()).collect())])
+        },
+    });
+    let from_empty_right_slices_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_list(seq.right_slices(true).into_iter().map(|e| e.to_rc_pd_obj()).collect())])
+        },
+    });
     let seq_split_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
         coerce2: num_to_nn_usize,
@@ -3859,8 +3909,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("÷", cc![intdiv_case, seq_split_discarding_case]);
     add_cases!("&", cc![bitand_case, intersection_case, just_if_case]);
     add_cases!("|", cc![bitor_case, union_case, just_unless_case]);
-    add_cases!("<s", cc![shl_case]);
-    add_cases!(">s", cc![shr_case]);
+    add_cases!("<s", cc![left_slices_case, shl_case]);
+    add_cases!(">s", cc![right_slices_case, shr_case]);
+    add_cases!("=s", cc![all_slices_case]);
+    add_cases!("§", cc![all_slices_case]);
     add_cases!("If", cc![just_if_case]);
     add_cases!("Ul", cc![just_unless_case]);
 
@@ -3897,6 +3949,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("›", cc![ceil_case, hoard_last_case, last_case]);
     add_cases!("«", cc![dec2_case, butlast_case]);
     add_cases!("»", cc![inc2_case, rest_case]);
+    add_cases!("«s", cc![from_empty_left_slices_case]);
+    add_cases!("»s", cc![from_empty_right_slices_case]);
     add_cases!("Floor", cc![floor_case], alias "<i");
     add_cases!("Ceil",  cc![ceil_case],  alias ">i");
     add_cases!("Round", cc![round_case], alias "=i");
