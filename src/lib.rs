@@ -2194,6 +2194,12 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 env.push(res);
                 Ok(())
             }),
+            "ä" | "az" | "autozip" => obb("autozip", bb, |env, body| {
+                let seq = pop_seq_range_for(env, "autozip")?;
+                let res = pd_zip(env, body, &seq, &seq.pythonic_split_right(1))?;
+                env.push(res);
+                Ok(())
+            }),
 
             _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
         }
