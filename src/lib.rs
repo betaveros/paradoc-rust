@@ -1306,7 +1306,8 @@ impl Block for CasedBuiltIn {
         if done {
             Ok(())
         } else {
-            Err(PdError::BadArgument(format!("No cases of {} applied!", self.name)))
+            let acc_str = accumulated_args.iter().map(|x| env.to_repr_string(x)).collect::<Vec<String>>().join(", ");
+            Err(PdError::BadArgument(format!("No cases of {} applied! Accumulated: {}", self.name, acc_str)))
         }
     }
     fn code_repr(&self) -> String {
@@ -3684,7 +3685,7 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_num,
         func: |_, num| {
             let n = num.trunc_to_bigint().ok_or(PdError::BadFloat)?;
-            let vs = num_iter::range_inclusive(BigInt::zero(), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
+            let vs = num_iter::range_inclusive(BigInt::one(), n).map(|x| PdObj::from(num.construct_like_self(x))).collect();
             Ok(vec![pd_list(vs)])
         },
     });
@@ -4079,10 +4080,10 @@ pub fn initialize(env: &mut Environment) {
     add_cases!(":b", cc![is_block_case]);
     add_cases!(":h", cc![is_hoard_case]);
 
-    let pop_if_true_case:  Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![] } else { vec![PdObj::clone(a)] })]) });
-    let pop_if_false_case: Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(vec![pd_list(if pd_truthy(a) { vec![PdObj::clone(a)] } else { vec![] })]) });
-    let pop_if_case:       Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(if pd_truthy(b) { vec![] } else { vec![PdObj::clone(a)] })]) });
-    let pop_if_not_case:   Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(vec![pd_list(if pd_truthy(b) { vec![PdObj::clone(a)] } else { vec![] })]) });
+    let pop_if_true_case:  Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(if pd_truthy(a) { vec![] } else { vec![PdObj::clone(a)] }) });
+    let pop_if_false_case: Rc<dyn Case> = Rc::new(UnaryAnyCase  { func: |_, a| Ok(if pd_truthy(a) { vec![PdObj::clone(a)] } else { vec![] }) });
+    let pop_if_case:       Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(if pd_truthy(b) { vec![] } else { vec![PdObj::clone(a)] }) });
+    let pop_if_not_case:   Rc<dyn Case> = Rc::new(BinaryAnyCase { func: |_, a, b| Ok(if pd_truthy(b) { vec![PdObj::clone(a)] } else { vec![] }) });
     add_cases!(";i",  vec![pop_if_case]);
     add_cases!(";n",  vec![pop_if_not_case]);
     add_cases!(";t",  vec![pop_if_true_case]);
