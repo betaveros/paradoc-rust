@@ -1987,6 +1987,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
         }
         PdObj::Block(bb) => match trailer {
             "" => Ok((PdObj::clone(obj), true)),
+            "a" | "anti" => obb("anti", bb, |env, body| {
+                let a = env.pop_result("anti no stack 1")?;
+                let b = env.pop_result("anti no stack 2")?;
+                env.push(a);
+                env.push(b);
+                body.run(env)
+            }),
             "b" | "bind" => {
                 let b = outer_env.pop_result("bind nothing to bind")?;
                 Ok(((PdObj::Block(Rc::new(BindBlock {
@@ -3880,6 +3887,20 @@ pub fn initialize(env: &mut Environment) {
             Ok(vec![])
         },
     });
+    let boolean_and_case: Rc<dyn Case> = Rc::new(BinaryAnyCase {
+        func: |_env, a, b| {
+            Ok(vec![PdObj::clone(
+                if pd_truthy(&a) { b } else { a }
+            )])
+        },
+    });
+    let boolean_or_case: Rc<dyn Case> = Rc::new(BinaryAnyCase {
+        func: |_env, a, b| {
+            Ok(vec![PdObj::clone(
+                if pd_truthy(&a) { a } else { b }
+            )])
+        },
+    });
 
     let index_stack_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_num,
@@ -3916,6 +3937,8 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("÷", cc![intdiv_case, seq_split_discarding_case]);
     add_cases!("&", cc![bitand_case, intersection_case, just_if_case]);
     add_cases!("|", cc![bitor_case, union_case, just_unless_case]);
+    add_cases!("&p", cc![boolean_and_case]);
+    add_cases!("|p", cc![boolean_or_case]);
     add_cases!("<s", cc![left_slices_case, shl_case]);
     add_cases!(">s", cc![right_slices_case, shr_case]);
     add_cases!("=s", cc![all_slices_case]);
