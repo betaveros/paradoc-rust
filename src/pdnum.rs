@@ -25,13 +25,18 @@ pub enum PdNum {
     Complex(Complex64),
 }
 
+// Simple utility to collapse two Option layers into one
+pub fn char_from_bigint(n: &BigInt) -> Option<char> {
+    std::char::from_u32(n.to_u32()?)
+}
+
 impl fmt::Display for PdNum {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PdNum::Int(n) => write!(formatter, "{}", n),
             PdNum::Float(f) => write!(formatter, "{}", f),
             // TODO as above
-            PdNum::Char(c)  => match c.to_u32().and_then(std::char::from_u32) {
+            PdNum::Char(c)  => match char_from_bigint(c) {
                 Some(ch) => write!(formatter, "{}", ch),
                 None => write!(formatter, "\\{}", c),
             }
@@ -148,7 +153,7 @@ impl PdNum {
             PdNum::Complex(z) => z.to_string(),
             // TODO: handle gracefully
             // "and_then" is >>=
-            PdNum::Char(c) => c.to_u32().and_then(std::char::from_u32).map_or(c.to_string(), |x| x.to_string()),
+            PdNum::Char(c) => char_from_bigint(c).map_or(c.to_string(), |x| x.to_string()),
         }
     }
 
@@ -159,7 +164,7 @@ impl PdNum {
             PdNum::Float(f)   => f.to_string(),
             PdNum::Complex(z) => format!("{} {}j+", z.re, z.im),
             // TODO as above
-            PdNum::Char(c)  => c.to_u32().and_then(std::char::from_u32).map_or_else(
+            PdNum::Char(c)  => char_from_bigint(c).map_or_else(
                 || ".'".to_string() + &c.to_string(),
                 |ch| ['\'', ch].iter().collect::<String>())
         }

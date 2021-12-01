@@ -449,9 +449,10 @@ impl Environment {
     }
 
     pub fn stack_to_string(&self) -> String {
-        self.stack.iter().map(|x| self.to_string(x) ).collect::<Vec<String>>().join("")
+        self.stack.iter().map(|x| self.to_string(x) ).collect::<String>()
     }
     pub fn stack_to_repr_string(&self) -> String {
+        // One day this will be .intersperse.collect
         self.stack.iter().map(|x| self.to_repr_string(x) ).collect::<Vec<String>>().join(" ")
     }
 
@@ -1130,7 +1131,7 @@ fn list_singleton(obj: &PdObj) -> Option<Rc<Vec<PdObj>>> {
 fn seq_singleton(obj: &PdObj) -> Option<PdSeq> {
     match obj {
         PdObj::Num(n) => match &**n {
-            PdNum::Char(c) => Some(PdSeq::String(Rc::new(vec![std::char::from_u32(c.to_u32()?)?]))),
+            PdNum::Char(c) => Some(PdSeq::String(Rc::new(vec![pdnum::char_from_bigint(c)?]))),
             _ => Some(PdSeq::List(Rc::new(vec![PdObj::clone(obj)]))),
         }
         _ => just_seq(obj),
@@ -1716,6 +1717,42 @@ fn pd_find_entry(env: &mut Environment, func: &Rc<dyn Block>, it: PdIter, fty: F
     found.ok_or(PdError::EmptyResult("find entry fail".to_string()))
 }
 
+fn pd_split_str_by_str(seq: &Vec<char>, tok: &Vec<char>) -> PdObj {
+    pd_list(slice_util::split_slice_by(seq.as_slice(), tok.as_slice())
+        .iter()
+        .map(|s| (PdObj::String(Rc::new(s.to_vec()))))
+        .collect())
+}
+
+fn pd_split_seq_by_seq(seq: &PdSeq, tok: &PdSeq) -> PdObj {
+    pd_list(slice_util::split_slice_by(seq.to_new_vec().as_slice(), tok.to_new_vec().as_slice())
+        .iter()
+        .map(|s| pd_list(s.to_vec()))
+        .collect())
+}
+
+fn pd_to_strings_and_join(env: &Environment, seq: &PdSeq, sep: &str) -> PdObj {
+   PdObj::from(seq.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(sep))
+}
+
+struct CharBlock {
+    name: &'static str,
+    ch: char,
+    f: fn(&mut Environment, char) -> PdUnit,
+}
+impl Debug for CharBlock {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "CharBlock {{ name: {:?}, char: {:?}, f: ??? }}", self.name, self.ch)
+    }
+}
+impl Block for CharBlock {
+    fn run(&self, env: &mut Environment) -> PdUnit {
+        (self.f)(env, self.ch)
+    }
+    fn code_repr(&self) -> String {
+        format!("{}_{}", self.ch, self.name)
+    }
+}
 struct StringBlock {
     name: &'static str,
     string: Rc<Vec<char>>,
@@ -1889,6 +1926,9 @@ impl CodeBlock {
     }
 }
 
+fn chb(name: &'static str, ch: char, f: fn(&mut Environment, char) -> PdUnit) -> PdResult<(PdObj, bool)> {
+    Ok(((PdObj::Block(Rc::new(CharBlock { name, ch, f }))), false))
+}
 fn stb(name: &'static str, s: &Rc<Vec<char>>, f: fn(&mut Environment, &Rc<Vec<char>>) -> PdUnit) -> PdResult<(PdObj, bool)> {
     let string: Rc<Vec<char>> = Rc::clone(s);
     Ok(((PdObj::Block(Rc::new(StringBlock { name, string, f }))), false))
@@ -1963,6 +2003,30 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             }
             "b" | "bits" => match &**n {
                 PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
+                _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
+            }
+            "r" => match &**n {
+                PdNum::Char(c) => chb("join", pdnum::char_from_bigint(c).ok_or(PdError::InapplicableTrailer("weird char".to_string()))?, |env, c| {
+                    let seq = seq_range(&env.pop_result("char-join stack failed")?).ok_or(PdError::BadArgument("can't char-join".to_string()))?;
+                    env.push(pd_to_strings_and_join(env, &seq, &c.to_string()));
+                    Ok(())
+                }),
+                _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
+            }
+            "s" => match &**n {
+                PdNum::Char(c) => chb("split", pdnum::char_from_bigint(c).ok_or(PdError::InapplicableTrailer("weird char".to_string()))?, |env, c| {
+                    let seq = just_seq(&env.pop_result("char-split stack failed")?).ok_or(PdError::BadArgument("can't char-split".to_string()))?;
+                    env.push(match seq {
+                        PdSeq::List(_) => {
+                            pd_split_seq_by_seq(&seq, &PdSeq::List(Rc::new(vec![PdObj::from(c)])))
+                        },
+                        PdSeq::String(s) => {
+                            pd_split_str_by_str(&s, &vec![c])
+                        },
+                        PdSeq::Range(_, _) => return Err(PdError::BadArgument("what".to_string()))
+                    });
+                    Ok(())
+                }),
                 _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
             }
             _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
@@ -2402,7 +2466,7 @@ impl Block for CodeBlock {
                         }
                     }
                     RcLeader::Var(s) => {
-                        let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(s.to_string() + &trailer.iter().map(|x| x.0.as_str()).collect::<Vec<&str>>().join("")))?;
+                        let (obj, rest) = lookup_and_break_trailers(env, s, trailer).ok_or(PdError::UndefinedVariable(s.to_string() + &trailer.iter().map(|x| x.0.as_str()).collect::<String>()))?;
                         let cobj = PdObj::clone(obj); // borrow checker to drop obj which unborrows env
                         let (obj, reluctant) = apply_all_trailers(env, cobj, false, rest)?;
 
@@ -3169,7 +3233,8 @@ pub fn initialize(env: &mut Environment) {
     let square_case   : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(a * a))]) });
     let cube_case     : Rc<dyn Case> = Rc::new(UnaryNumCase { func: |_, a| Ok(vec![(PdObj::from(&(a * a) * a))]) });
 
-    let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![(PdObj::from(a.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(" ")))]) });
+    let space_join_case = unary_seq_range_case(|env, a| { Ok(vec![pd_to_strings_and_join(env, a, " ")]) });
+    let comma_join_case = unary_seq_range_case(|env, a| { Ok(vec![pd_to_strings_and_join(env, a, ",")]) });
 
     let index_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
@@ -3379,14 +3444,14 @@ pub fn initialize(env: &mut Environment) {
         coerce1: just_string,
         coerce2: just_string,
         func: |_, seq, tok| {
-            Ok(vec![pd_list(slice_util::split_slice_by(seq.as_slice(), tok.as_slice()).iter().map(|s| (PdObj::String(Rc::new(s.to_vec())))).collect())])
+            Ok(vec![pd_split_str_by_str(seq, tok)])
         },
     });
     let seq_split_by_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: just_seq,
         coerce2: just_seq,
         func: |_, seq, tok| {
-            Ok(vec![pd_list(slice_util::split_slice_by(seq.to_new_vec().as_slice(), tok.to_new_vec().as_slice()).iter().map(|s| pd_list(s.to_vec())).collect())])
+            Ok(vec![pd_split_seq_by_seq(seq, tok)])
         },
     });
     let seq_window_case: Rc<dyn Case> = Rc::new(BinaryCase {
@@ -3787,9 +3852,7 @@ pub fn initialize(env: &mut Environment) {
             match (seq1, seq2) {
                 (PdSeq::String(_), _) | (_, PdSeq::String(_)) => {
                     Ok(vec![
-                       PdObj::from(
-                           seq1.iter().map(|x| env.to_string(&x)).collect::<Vec<String>>().join(&env.seq_to_string(seq2))
-                       )
+                       pd_to_strings_and_join(env, seq1, &env.seq_to_string(seq2))
                     ])
                 }
                 _ => {
@@ -4002,6 +4065,7 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("™", cc![transpose_case]);
     add_cases!("Tt", cc![transpose_case]);
     add_cases!(" r", cc![space_join_case]);
+    add_cases!(",r", cc![comma_join_case]);
     add_cases!(",", cc![range_case, zip_range_case, filter_indices_case]);
     add_cases!("J", cc![one_range_case, zip_one_range_case, reject_indices_case]);
     add_cases!("Ð", cc![down_one_range_case, map_down_singleton_case]);
@@ -4281,6 +4345,22 @@ pub fn initialize(env: &mut Environment) {
         }
         Ok(())
     }, alias "]s");
+    add_builtin!("]_index", |env| {
+        let case_list = env.pop_until_stack_marker();
+        let target = env.pop_result("]_index: no target")?;
+        match target {
+            PdObj::Num(n) => {
+                let index = n.to_isize().ok_or(PdError::BadArgument("]_index: bad target out of isize".to_string()))?;
+                let modded_index = index.rem_euclid(case_list.len() as isize) as usize;
+                // Technically an unnecessary clone, we only need the one element from the vector
+                // and can consume it in the process; but there's no obvious way to do it and it
+                // is probably not worth the complexity
+                let case = &case_list.get(modded_index).ok_or(PdError::BadArgument("bad index target".to_string()))?;
+                apply_on(env, PdObj::clone(case))
+            }
+            _ => Err(PdError::BadArgument("]_index: non-num target".to_string())),
+        }
+    }, alias "]i");
     add_builtin!("]_check", |env| {
         let check_list = env.pop_until_stack_marker();
         let n = check_list.len();
