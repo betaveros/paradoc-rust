@@ -132,6 +132,39 @@ pub fn parse_string_leader(s: &str) -> String {
     ret
 }
 
+// inverse of the above
+// " becomes \"
+// \ becomes \\ if before \ or " or EOF, \ otherwise
+pub fn repr_string_leader(s: impl IntoIterator<Item=char>) -> String {
+    // maybe TODO: is pushing onto a String performant?
+    let mut ret = "\"".to_string();
+    let mut cit = s.into_iter();
+    let mut nxt = cit.next();
+    loop {
+        match nxt {
+            Some('\\') => {
+                nxt = cit.next();
+                match nxt {
+                    Some('\\' | '"') | None => { ret.push('\\'); ret.push('\\'); }
+                    _ => { ret.push('\\'); }
+                }
+            }
+            Some('"') => {
+                ret.push('\\'); ret.push('"');
+                nxt = cit.next();
+            }
+            Some(c) => {
+                ret.push(c);
+                nxt = cit.next();
+            }
+            None => { break; }
+        }
+    }
+    ret.push('"');
+    ret.shrink_to_fit();
+    ret
+}
+
 pub fn parse_trailer(s: &str) -> Vec<Trailer> {
     let mut trailers = Vec::new();
     let mut cit = s.chars();

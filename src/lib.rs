@@ -441,7 +441,7 @@ impl Environment {
     fn to_repr_string(&self, obj: &PdObj) -> String {
         match obj {
             PdObj::Num(n) => n.repr(),
-            PdObj::String(s) => format!("\"{}\"", &s.iter().collect::<String>()),
+            PdObj::String(s) => lex::repr_string_leader(s.iter().copied()),
             PdObj::List(v) => format!("[{}]", v.iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")),
             PdObj::Hoard(h) => format!("Hoard({})", h.borrow().iter().map(|o| self.to_repr_string(o)).collect::<Vec<String>>().join(" ")), // FIXME dicts are gone
             PdObj::Block(b) => b.code_repr(),
@@ -518,10 +518,7 @@ impl fmt::Display for PdObj {
         match self {
             PdObj::Num(n) => write!(formatter, "{}", n),
             PdObj::String(s) => {
-                // FIXME
-                write!(formatter, "\"")?;
-                for c in s.iter() { write!(formatter, "{}", c)?; }
-                write!(formatter, "\"")
+                write!(formatter, "{}", lex::repr_string_leader(s.iter().copied()))
             }
             PdObj::List(xs) => {
                 write!(formatter, "[")?;
@@ -2800,10 +2797,7 @@ impl fmt::Display for PdKey {
         match self {
             PdKey::Num(n) => write!(formatter, "{}", n),
             PdKey::String(s) => {
-                // FIXME
-                write!(formatter, "\"")?;
-                for c in s.iter() { write!(formatter, "{}", c)?; }
-                write!(formatter, "\"")
+                write!(formatter, "{}", lex::repr_string_leader(s.iter().copied()))
             }
             PdKey::List(xs) => {
                 write!(formatter, "[")?;
