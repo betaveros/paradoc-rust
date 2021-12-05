@@ -2967,6 +2967,15 @@ fn pd_organize_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
     let bty = seq.build_type();
     Ok(pd_list(vu::organize_by(seq, proj)?.into_iter().map(|vs| pd_build_like(bty, vs)).collect()))
 }
+fn pd_distinct_elements_and_frequencies_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    Ok(pd_list(vu::distinct_elements_and_frequencies_by(seq, proj)?.into_iter().map(|(v, n)| pd_list(vec![v, PdObj::from(n)])).collect()))
+}
+fn pd_most_frequent_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    Ok(vu::distinct_elements_and_frequencies_by(seq, proj)?.into_iter().max_by_key(|(_, freq)| *freq).ok_or(PdError::EmptyResult("most frequent of empty".to_string()))?.0)
+}
+fn pd_least_frequent_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
+    Ok(vu::distinct_elements_and_frequencies_by(seq, proj)?.into_iter().min_by_key(|(_, freq)| *freq).ok_or(PdError::EmptyResult("least frequent of empty".to_string()))?.0)
+}
 fn pd_sort_by(seq: &PdSeq, proj: impl PdProj) -> PdResult<PdObj> {
     Ok(pd_build_like(seq.build_type(), vu::sort_by(seq, proj)?))
 }
@@ -3841,6 +3850,24 @@ pub fn initialize(env: &mut Environment) {
     let organize_by_case: Rc<dyn Case> = block_seq_range_case(|env, block, seq| {
         Ok(vec![pd_organize_by(&seq, pd_key_projector(env, &block))?])
     });
+    let distinct_elements_and_frequencies_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_distinct_elements_and_frequencies_by(&seq, pd_key)?])
+        },
+    });
+    let most_frequent_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_most_frequent_by(&seq, pd_key)?])
+        },
+    });
+    let least_frequent_case: Rc<dyn Case> = Rc::new(UnaryCase {
+        coerce: just_seq,
+        func: |_, seq| {
+            Ok(vec![pd_least_frequent_by(&seq, pd_key)?])
+        },
+    });
 
     let join_case: Rc<dyn Case> = Rc::new(BinaryCase {
         coerce1: seq_singleton,
@@ -4011,6 +4038,9 @@ pub fn initialize(env: &mut Environment) {
     add_cases!("=", cc![index_hoard_case, eq_case, index_case, find_case]);
     add_cases!("Find_index", cc![find_index_str_str_case, find_index_equal_case, find_index_case], alias "@");
     add_cases!("#", cc![count_factors_case, count_str_str_case, count_equal_case, count_by_case]);
+    add_cases!("#p", cc![distinct_elements_and_frequencies_case]);
+    add_cases!("#æ", cc![most_frequent_case]);
+    add_cases!("#œ", cc![least_frequent_case]);
     add_cases!("<", cc![lt_case, lt_slice_case, take_while_case]);
     add_cases!(">", cc![gt_case, ge_slice_case, drop_while_case]);
     add_cases!("=c", cc![cyclic_index_case]);
@@ -4544,6 +4574,10 @@ pub fn initialize(env: &mut Environment) {
     });
     env.insert_builtin("!j", DeepNumToNumBlock {
         func: |a| PdNum::iverson(a.is_pure_real()),
+        name: "not_imaginary".to_string(),
+    });
+    env.insert_builtin("&j", DeepNumToNumBlock {
+        func: |a| PdNum::iverson(a.is_pure_imaginary()),
         name: "not_imaginary".to_string(),
     });
     env.insert_builtin("?j", DeepNumToNumBlock {

@@ -131,6 +131,23 @@ pub fn organize_by<I, K: Clone + Hash + Eq, E, F>(it: impl IntoIterator<Item=I>,
     Ok(groups)
 }
 
+pub fn distinct_elements_and_frequencies_by<I, K: Hash + Eq, E, F>(it: impl IntoIterator<Item=I>, mut proj: F) -> Result<Vec<(I, usize)>, E> where F: FnMut(&I) -> Result<K, E> {
+    let mut elements: Vec<(I, usize)> = Vec::new();
+    let mut indices: HashMap<K, usize> = HashMap::new();
+
+    for e in it {
+        let key = proj(&e)?;
+        match indices.get(&key) {
+            Some(i) => { elements[*i].1 += 1; }
+            None => {
+                indices.insert(key, elements.len());
+                elements.push((e, 1));
+            }
+        }
+    }
+    Ok(elements)
+}
+
 pub fn sort_by<I, K: Ord, E, F>(it: impl IntoIterator<Item=I>, proj: F) -> Result<Vec<I>, E> where F: FnMut(&I) -> Result<K, E> {
     let mut keyed_vec = force_keyed_vec(it, proj)?;
     // sort_by_key's key function wants us to give ownership of the key :-/
