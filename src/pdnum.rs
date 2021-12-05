@@ -670,28 +670,42 @@ impl PdNum {
     }
 }
 
+// ????????????????????
+trait SoftDeref {
+    type Output;
+    fn soft_deref(self) -> Self::Output;
+}
+impl SoftDeref for Complex64 {
+    type Output = Complex64;
+    fn soft_deref(self) -> Complex64 { self }
+}
+impl SoftDeref for &Complex64 {
+    type Output = Complex64;
+    fn soft_deref(self) -> Complex64 { *self }
+}
+impl SoftDeref for f64 {
+    type Output = f64;
+    fn soft_deref(self) -> f64 { self }
+}
+impl SoftDeref for &f64 {
+    type Output = f64;
+    fn soft_deref(self) -> f64 { *self }
+}
+
 // ????????
 macro_rules! binary_match {
     ($a:expr, $b:expr, $method:ident, $intmethod:expr, $floatmethod:expr, $complexmethod:expr) => {
         match ($a, $b) {
-            (PdNum::Complex(za), b) => PdNum::Complex($complexmethod(*za, b.to_complex_or_inf())),
-            (a, PdNum::Complex(zb)) => PdNum::Complex($complexmethod(a.to_complex_or_inf(), *zb)),
+            (PdNum::Complex(za), b) => PdNum::Complex($complexmethod(za.soft_deref(), b.to_complex_or_inf())),
+            (a, PdNum::Complex(zb)) => PdNum::Complex($complexmethod(a.to_complex_or_inf(), zb.soft_deref())),
 
-            (PdNum::Float(fa), b) => PdNum::Float($floatmethod(*fa, b.to_f64_or_inf_or_complex().expect("complex not elim"))),
-            (a, PdNum::Float(fb)) => PdNum::Float($floatmethod(a.to_f64_or_inf_or_complex().expect("complex not elim"), *fb)),
+            (PdNum::Float(fa), b) => PdNum::Float($floatmethod(fa.soft_deref(), b.to_f64_or_inf_or_complex().expect("complex not elim"))),
+            (a, PdNum::Float(fb)) => PdNum::Float($floatmethod(a.to_f64_or_inf_or_complex().expect("complex not elim"), fb.soft_deref())),
 
             (PdNum::Int  (a), PdNum::Int  (b)) => PdNum::Int($intmethod(a, b)),
             (PdNum::Int  (a), PdNum::Char (b)) => PdNum::Int($intmethod(a, b)),
             (PdNum::Char (a), PdNum::Int  (b)) => PdNum::Int($intmethod(a, b)),
             (PdNum::Char (a), PdNum::Char (b)) => PdNum::Char($intmethod(a, b)),
-        }
-    };
-}
-
-macro_rules! def_binary_method {
-    ($method:ident, $intmethod:expr, $floatmethod:expr, $complexmethod:expr) => {
-        fn $method(self, other: &PdNum) -> PdNum {
-            binary_match!(self, other, $method, $intmethod, $floatmethod, $complexmethod)
         }
     };
 }
@@ -706,15 +720,31 @@ macro_rules! forward_impl_binary_method {
     };
 }
 
-macro_rules! impl_binary_method {
-    ($imp:ident, $method:ident, $intmethod:expr, $floatmethod:expr, $complexmethod:expr) => {
-        impl $imp<&PdNum> for &PdNum {
+macro_rules! impl_binary_method_1 {
+    ($self:ty, $other:ty, $imp:ident, $method:ident, $intmethod:expr, $floatmethod:expr, $complexmethod:expr) => {
+        impl $imp<$other> for $self {
             type Output = PdNum;
 
-            def_binary_method!($method, $intmethod, $floatmethod, $complexmethod);
+            fn $method(self, other: $other) -> PdNum {
+                binary_match!(self, other, $method, $intmethod, $floatmethod, $complexmethod)
+            }
         }
+    };
+}
 
+macro_rules! impl_binary_method {
+    ($imp:ident, $method:ident, $intmethod:expr, $floatmethod:expr, $complexmethod:expr) => {
+        impl_binary_method_1!(&PdNum, &PdNum, $imp, $method, $intmethod, $floatmethod, $complexmethod);
         forward_impl_binary_method!($imp, $method);
+    };
+}
+
+macro_rules! impl_binary_method_4 {
+    ($imp:ident, $method:ident, $intmethod:expr, $floatmethod:expr, $complexmethod:expr) => {
+        impl_binary_method_1!(&PdNum, &PdNum, $imp, $method, $intmethod, $floatmethod, $complexmethod);
+        impl_binary_method_1!(&PdNum, PdNum, $imp, $method, $intmethod, $floatmethod, $complexmethod);
+        impl_binary_method_1!(PdNum, &PdNum, $imp, $method, $intmethod, $floatmethod, $complexmethod);
+        impl_binary_method_1!(PdNum, PdNum, $imp, $method, $intmethod, $floatmethod, $complexmethod);
     };
 }
 
@@ -729,9 +759,10 @@ impl PdNum {
     }
 }
 
-impl_binary_method!(Add, add, Add::add, Add::add, Add::add);
-impl_binary_method!(Sub, sub, Sub::sub, Sub::sub, Sub::sub);
-impl_binary_method!(Mul, mul, Mul::mul, Mul::mul, Mul::mul);
+impl_binary_method_4!(Add, add, Add::add, Add::add, Add::add);
+impl_binary_method_4!(Sub, sub, Sub::sub, Sub::sub, Sub::sub);
+impl_binary_method_4!(Mul, mul, Mul::mul, Mul::mul, Mul::mul);
+// Integer::mod_floor takes references only
 impl_binary_method!(Rem, rem, Integer::mod_floor, f64::rem_euclid, Rem::rem);
 
 impl Div<&PdNum> for &PdNum {
@@ -753,7 +784,14 @@ forward_impl_binary_method!(Div, div);
 impl Neg for PdNum {
     type Output = PdNum;
 
-    fn neg(self) -> PdNum { -&self }
+    fn neg(self) -> PdNum {
+        match self {
+            PdNum::Int(n) => PdNum::Int(-n),
+            PdNum::Float(f) => PdNum::Float(-f),
+            PdNum::Char(c) => PdNum::Char(-c),
+            PdNum::Complex(z) => PdNum::Complex(-z),
+        }
+    }
 }
 impl Neg for &PdNum {
     type Output = PdNum;
