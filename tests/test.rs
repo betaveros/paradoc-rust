@@ -15,19 +15,19 @@ fn list(xs: Vec<PdObj>) -> PdObj {
 
 macro_rules! intvec {
     ($($case:expr),*) => {
-        vec![$( int($case) ),*];
+        vec![$( int($case) ),*]
     }
 }
 
 macro_rules! lv {
     ($($case:expr),*) => {
-        list(vec![$( $case ),*]);
+        list(vec![$( $case ),*])
     }
 }
 
 macro_rules! liv {
     ($($case:expr),*) => {
-        list(intvec![$( $case ),*]);
+        list(intvec![$( $case ),*])
     }
 }
 
