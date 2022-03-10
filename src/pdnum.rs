@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use std::cmp::Ordering;
-use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Neg, Deref};
+use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Neg, Not, Deref};
 use std::ops::AddAssign;
 use std::iter::{Sum, Product};
 use std::hash::{Hash, Hasher};
@@ -208,6 +208,13 @@ impl PdNum {
                     PdNum::Complex(z / z.norm())
                 }
             }
+        }
+    }
+
+    pub fn trunc_to_int(&self) -> PdNum {
+        match self {
+            PdNum::Char(c) => PdNum::Int(c.clone()),
+            _ => self.trunc(),
         }
     }
 
@@ -805,6 +812,24 @@ impl Neg for &PdNum {
         }
     }
 }
+impl Not for PdNum {
+    type Output = PdNum;
+
+    fn not(self) -> PdNum { !&self }
+}
+impl Not for &PdNum {
+    type Output = PdNum;
+
+    fn not(self) -> PdNum {
+        match self {
+            PdNum::Char(c) => PdNum::Char(!c),
+            _ => match self.trunc_to_bigint() {
+                Some(n) => PdNum::Int(!n),
+                None => PdNum::Float(f64::NAN),
+            }
+        }
+    }
+}
 
 impl AddAssign<&PdNum> for PdNum {
     fn add_assign(&mut self, other: &PdNum) {
@@ -861,6 +886,27 @@ impl_force_bi_binary_method!(BitAnd, bitand, BitAnd::bitand);
 impl_force_bi_binary_method!(BitOr, bitor, BitOr::bitor);
 impl_force_bi_binary_method!(BitXor, bitxor, BitXor::bitxor);
 
+fn lazy_is_prime(n: &BigInt) -> bool {
+    if n <= &BigInt::from(1) {
+        false
+    } else if n <= &BigInt::from(3) {
+        true
+    } else if (n % BigInt::from(2)).is_zero() {
+        false
+    } else {
+        let mut f = BigInt::from(3);
+        loop {
+            if (n % &f).is_zero() {
+                return false;
+            }
+            if &(&f * &f) >= n {
+                return true;
+            }
+            f += 2;
+        }
+    }
+}
+
 impl PdNum {
     pub fn gcd(&self, other: &PdNum) -> PdNum {
         force_bi_binary_match!(self, other, gcd, Integer::gcd)
@@ -884,5 +930,20 @@ impl PdNum {
             PdNum::Float(a) => PdNum::Int(a.trunc().to_bigint()? >> shift_amount),
             PdNum::Complex(a) => PdNum::Int(a.re.trunc().to_bigint()? >> shift_amount),
         })
+    }
+
+    pub fn is_prime(&self) -> bool {
+        match self {
+            PdNum::Int(a) => lazy_is_prime(a),
+            PdNum::Char(a) => lazy_is_prime(a),
+            PdNum::Float(a) => match a.to_bigint() {
+                Some(n) => lazy_is_prime(&n),
+                None => false,
+            }
+            PdNum::Complex(a) => a.im == 0.0 && match a.re.to_bigint() {
+                Some(n) => lazy_is_prime(&n),
+                None => false,
+            }
+        }
     }
 }

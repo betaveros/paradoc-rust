@@ -69,7 +69,7 @@ pub fn lex(code: &str) -> (&str, Vec<(&str, &str)>) {
         static ref PD_INIT_TRAILER_PATTERN: Regex = Regex::new(r#"^[a-z_]*"#).unwrap();
 
         // group 1, group 2
-        static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|—?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e[0-9]+)?|—?\.[0-9]+(?:e[0-9]+)?|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_šþáàéèíìóòúâêîôûäëïöüøæœç])([a-z_šþáàéèíìóòúâêîôûäëïöüøæœç]*)"#).unwrap();
+        static ref PD_TOKEN_PATTERN: Regex = Regex::new(r#"\.\.[^\n\r]*|("(?:\\"|\\\\|[^"])*"|'.|—?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e[0-9]+)?|—?\.[0-9]+(?:e[0-9]+)?|[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|[^"'0-9a-z_šþáàéèíìóòúâêîôûäëïöüøæœçž])([a-z_šþáàéèíìóòúâêîôûäëïöüøæœçž]*)"#).unwrap();
 
         static ref PD_NUMERIC_LITERAL_TOKEN_PATTERN: Regex = Regex::new(r#"^—?[0-9]+(?:\.[0-9]+)?(?:e[0-9]+)?|—?\.[0-9]+(?:e[0-9]+)?$"#).unwrap();
     }

@@ -1554,6 +1554,39 @@ fn pd_zip(env: &mut Environment, func: &Rc<dyn Block>, seq1: PdSeq, seq2: PdSeq)
     ret.map(|()| pd_build_like(bty, acc))
 }
 
+fn pd_ziplongest(env: &mut Environment, func: &Rc<dyn Block>, seq1: &PdSeq, seq2: &PdSeq) -> PdResult<PdObj> {
+    let bty = seq1.build_type() & seq2.build_type();
+    let mut acc = Vec::new();
+
+    env.push_x(PdObj::from("INTERNAL Z FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+    env.push_x(PdObj::from("INTERNAL Y FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+    env.push_x(PdObj::from("INTERNAL X FILLER -- YOU SHOULD NOT SEE THIS".to_string()));
+
+    let mut ret = Ok(());
+    for (i, (obj1, obj2)) in seq1.iter().zip(seq2.iter()).enumerate() {
+        env.set_zyx(PdObj::from(i), PdObj::clone(&obj2), PdObj::clone(&obj1));
+        match sandbox(env, &func, vec![obj1, obj2]) {
+            Ok(objs) => { acc.extend(objs); }
+            Err(PdError::Break) => break,
+            Err(PdError::Continue) => {}
+            Err(e) => { ret = Err(e); break; }
+        }
+    }
+
+    for i in seq1.len()..seq2.len() {
+        acc.push(seq2.index(i).unwrap().to_rc_pd_obj());
+    }
+    for i in seq2.len()..seq1.len() {
+        acc.push(seq1.index(i).unwrap().to_rc_pd_obj());
+    }
+
+    env.pop_x();
+    env.pop_x();
+    env.pop_x();
+
+    ret.map(|()| pd_build_like(bty, acc))
+}
+
 fn pd_zip_as_list(seq1: &PdSeq, seq2: &PdSeq) -> PdObj {
     let bty = seq1.build_type() & seq2.build_type();
     let mut acc: Vec<PdObj> = Vec::new();
@@ -1985,10 +2018,11 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             "k" | "thousand" => { Ok((PdObj::from(n.mul_const(1000)), false)) }
             "p" | "power" => n_bdzb("power", |a, b| a.pow_num(b), n),
             "j" | "imag" => Ok((PdObj::from(&**n * &PdNum::from(Complex64::new(0.0, 1.0))), false)),
+            "r" | "root" => n_bdzb("root", |a, b| a.pow_num(&(&PdNum::from(1)/b)), n),
             "á" => n_bdzb("á", |a, b| a + b, n),
             "à" => n_bdzb("à", |a, b| a - b, n),
-            "é" => Ok((PdObj::from(&**n * &**n), false)),
-            "è" => Ok((PdObj::from(PdNum::from(2).pow_num(n)), false)),
+            "è" => Ok((PdObj::from(&**n * &**n), false)),
+            "é" => Ok((PdObj::from(PdNum::from(2).pow_num(n)), false)),
             "ì" => Ok((PdObj::from(-&**n), false)),
             "í" => Ok((PdObj::from(&PdNum::from(1)/n), false)),
             "ó" => n_bdzb("ó", |a, b| a * b, n),
@@ -2075,6 +2109,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 let seq2 = pop_seq_range_for(env, "zip(2)")?;
                 let seq1 = pop_seq_range_for(env, "zip(1)")?;
                 let res = pd_zip(env, body, seq1, seq2)?;
+                env.push(res);
+                Ok(())
+            }),
+            "ž" | "ziplongest" => obb("ziplongest", bb, |env, body| {
+                let seq2 = pop_seq_range_for(env, "ziplongest(2)")?;
+                let seq1 = pop_seq_range_for(env, "ziplongest(1)")?;
+                let res = pd_ziplongest(env, body, &seq1, &seq2)?;
                 env.push(res);
                 Ok(())
             }),
@@ -2528,13 +2569,13 @@ macro_rules! nn_n {
 
 macro_rules! cc {
     ($($case:expr),*) => {
-        vec![$( Rc::clone(&$case) ),*];
+        vec![$( Rc::clone(&$case) ),*]
     }
 }
 
 macro_rules! poc {
     ($($case:expr),*) => {
-        vec![$( PdObj::clone(&$case) ),*];
+        vec![$( PdObj::clone(&$case) ),*]
     }
 }
 
@@ -3085,8 +3126,8 @@ pub fn initialize(env: &mut Environment) {
     let abs_case    = n_n![a, a.abs()];
     let neg_case    = n_n![a, -a];
     let signum_case = n_n![a, a.signum()];
-    let trunc_case  = n_n![a, a.trunc()];
     let round_case  = n_n![a, a.round()];
+    let trunc_to_int_case  = n_n![a, a.trunc_to_int()];
     let equals_one_case = n_n![a, PdNum::iverson(a == &PdNum::from(1))];
     let positive_case = n_n![a, PdNum::iverson(a > &PdNum::from(0))];
     let negative_case = n_n![a, PdNum::iverson(a < &PdNum::from(0))];
@@ -4236,7 +4277,7 @@ pub fn initialize(env: &mut Environment) {
         coerce: just_block,
         func: |env, block| Ok(vec![pd_list(pd_iterate(env, &block)?.0)]),
     });
-    add_cases!("I", cc![trunc_case, string_to_int_case, iterate_case]);
+    add_cases!("I", cc![trunc_to_int_case, string_to_int_case, iterate_case]);
 
     let int_groups_case: Rc<dyn Case> = Rc::new(UnaryCase {
         coerce: just_string,
@@ -4411,8 +4452,9 @@ pub fn initialize(env: &mut Environment) {
             Err(PdError::AssertError(msg))
         }
     });
-    add_builtin!("Expand_or_eval", |env| {
+    add_builtin!("Compl_or_expand_or_eval", |env| {
         match env.pop_result("~ failed")? {
+            PdObj::Num(n) => { env.push(PdObj::from(!&*n)); Ok(()) }
             PdObj::Block(bb) => bb.run(env),
             PdObj::List(ls) => { env.extend_clone(&*ls); Ok(()) }
             _ => Err(PdError::BadArgument("~ can't handle".to_string())),
@@ -4628,6 +4670,20 @@ pub fn initialize(env: &mut Environment) {
     env.insert_builtin("Nc", DeepCharToIntOrZeroBlock {
         func: |a| *char_info::NEST_MAP.get(&a).unwrap_or(&0),
         name: "nest_char".to_string(),
+    });
+
+    // hmm
+    env.insert_builtin("Is_prime", DeepNumToNumBlock {
+        func: |a| PdNum::iverson(a.is_prime()),
+        name: "is_prime".to_string(),
+    });
+    env.insert_builtin("Pp", DeepNumToNumBlock {
+        func: |a| PdNum::iverson(a.is_prime()),
+        name: "is_prime".to_string(),
+    });
+    env.insert_builtin("¶", DeepNumToNumBlock {
+        func: |a| PdNum::iverson(a.is_prime()),
+        name: "is_prime".to_string(),
     });
 
     add_builtin!("Assign_bullet", |env| {
