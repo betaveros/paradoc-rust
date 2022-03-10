@@ -2018,7 +2018,6 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
             "k" | "thousand" => { Ok((PdObj::from(n.mul_const(1000)), false)) }
             "p" | "power" => n_bdzb("power", |a, b| a.pow_num(b), n),
             "j" | "imag" => Ok((PdObj::from(&**n * &PdNum::from(Complex64::new(0.0, 1.0))), false)),
-            "r" | "root" => n_bdzb("root", |a, b| a.pow_num(&(&PdNum::from(1)/b)), n),
             "á" => n_bdzb("á", |a, b| a + b, n),
             "à" => n_bdzb("à", |a, b| a - b, n),
             "è" => Ok((PdObj::from(&**n * &**n), false)),
@@ -2037,13 +2036,13 @@ fn apply_trailer(outer_env: &mut Environment, obj: &PdObj, trailer0: &lex::Trail
                 PdNum::Int(i) => Ok((pd_list(i.to_radix_be(10).1.iter().map(|x| PdObj::from(*x as usize)).collect()), false)),
                 _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
             }
-            "r" => match &**n {
+            "r" | "root" => match &**n {
                 PdNum::Char(c) => chb("join", pdnum::char_from_bigint(c).ok_or(PdError::InapplicableTrailer("weird char".to_string()))?, |env, c| {
                     let seq = seq_range(&env.pop_result("char-join stack failed")?).ok_or(PdError::BadArgument("can't char-join".to_string()))?;
                     env.push(pd_to_strings_and_join(env, &seq, &c.to_string()));
                     Ok(())
                 }),
-                _ => Err(PdError::InapplicableTrailer(format!("{} on {}", trailer, obj)))
+                _ => n_bdzb("root", |a, b| a.pow_num(&(&PdNum::from(1)/b)), n),
             }
             "s" => match &**n {
                 PdNum::Char(c) => chb("split", pdnum::char_from_bigint(c).ok_or(PdError::InapplicableTrailer("weird char".to_string()))?, |env, c| {
