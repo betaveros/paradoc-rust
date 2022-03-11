@@ -254,6 +254,8 @@ fn parse_one_at(tokens: &Vec<(&str, &str)>, start: usize) -> Option<(Token, usiz
                         ),
                         '.' => (Leader::Assign(AssignType::Peek), start + 1),
                         '—' => (Leader::Assign(AssignType::Pop), start + 1),
+                        '⇒' => (Leader::Assign(AssignType::Peek), start + 1),
+                        '→' => (Leader::Assign(AssignType::Pop), start + 1),
                         '}' => return None,
                         _ => (Leader::Var(leader.to_string()), start + 1),
                     }
