@@ -68,6 +68,11 @@ fn math_complex() {
 }
 
 #[test]
+fn primes() {
+    assert_eq!(paradoc::simple_eval("100Ppf"), vec![liv![2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97]]);
+}
+
+#[test]
 fn readme() {
     assert_eq!(paradoc::simple_eval("¹²m"), vec![liv![0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100]]);
 }

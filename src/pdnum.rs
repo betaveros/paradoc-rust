@@ -891,18 +891,28 @@ fn lazy_is_prime(n: &BigInt) -> bool {
         false
     } else if n <= &BigInt::from(3) {
         true
-    } else if (n % BigInt::from(2)).is_zero() {
+    } else if (n % BigInt::from(2)).is_zero() || (n % BigInt::from(3)).is_zero() {
         false
     } else {
-        let mut f = BigInt::from(3);
+        let s = n.sqrt(); // truncates
+        let mut f = BigInt::from(5);
         loop {
+            if f > s {
+                return true;
+            }
             if (n % &f).is_zero() {
                 return false;
             }
-            if &(&f * &f) >= n {
+
+            let g = &f + BigInt::from(2);
+            if g > s {
                 return true;
             }
-            f += 2;
+            if (n % &g).is_zero() {
+                return false;
+            }
+
+            f += 6;
         }
     }
 }
