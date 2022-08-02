@@ -27,7 +27,7 @@ textarea {
 <body>
 <h1>paradoc-rust</h1>
 <p>
-You can read the <a href="https://betaveros.github.io/paradoc/">Paradoc documentation</a>. This is a separate, less complete implementation (in Rust, via WASM) that doesn't directly share any code and likely has incompatibilities, but many basic built-ins should be the same. Also note that this implementation runs <em>synchronously in your browser</em>; running a slow program will freeze your browser. Hopefully I'll get around to fixing that one of these days.
+You can read the <a href="https://betaveros.github.io/paradoc/">Paradoc documentation</a>. This is a separate, less complete implementation (in Rust, via WASM) that doesn't directly share any code and likely has incompatibilities, but many basic built-ins should be the same.
 </p>
 <p>Code:</p>
 <textarea id="code"></textarea>
@@ -42,10 +42,13 @@ You can read the <a href="https://betaveros.github.io/paradoc/">Paradoc document
 </div>
 <button id="gen-url" type="button" role="button">Generate URL</button>
 <textarea id="url"></textarea>
+<script src='pkg/paradoc.js'></script>
 <script type="module">
 // https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html (???)
 // wasm-pack build --target web
-import init, { encapsulated_eval } from './pkg/paradoc.js';
+// import init, { encapsulated_eval } from './pkg/paradoc.js';
+// wasm-pack build --target no-modules
+// const { encapsulated_eval } = wasm_bindgen;
 
 const codepage =['∅', 'α', 'β', 'γ', '\x04', 'ε', 'φ', '\x07', '\x08', '\t', '\n', '\x0b', 'λ', '\r', 'Ŋ', '\x0f', 'Ƥ', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', 'χ', '\x19', 'ζ', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f', ' ', '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?', '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', '\\', ']', '^', '_', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~', '\x7f', '€', '�', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '→', 'Ž', '�', '�', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '⇒', 'ž', 'Ÿ', '␣', '¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '\xad', '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ð', 'Ñ', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'Ý', 'Þ', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ð', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù', 'ú', 'û', 'ü', 'ý', 'þ', 'ÿ'];
 const codepageInverse = {};
@@ -53,19 +56,14 @@ for (let i = 0; i < codepage.length; i++) {
 	codepageInverse[codepage[i]] = i;
 }
 
-async function prepare() {
-	await init();
+async function prepare(worker) {
+	// await wasm_bindgen('./pkg/paradoc_bg.wasm');
 	const code = document.getElementById('code');
 	const input = document.getElementById('input');
-	const outerOutput = document.getElementById('outer-output');
-	const output = document.getElementById('output');
-	const error = document.getElementById('error');
 	const runner = document.getElementById('run');
 	runner.addEventListener('click', function() {
-		const outs = encapsulated_eval(code.value, input.value);
-		outerOutput.style.display = 'block';
-		output.textContent = outs.get_output();
-		error.textContent = outs.get_error();
+		runner.disabled = true;
+		worker.postMessage([code.value, input.value]);
 	});
 	runner.disabled = false;
 	runner.textContent = "Run!";
@@ -119,7 +117,6 @@ document.addEventListener('DOMContentLoaded', function() {
 			code.value = b64decode(base64);
 		}
 	}
-	prepare();
 	document.getElementById('gen-url').addEventListener('click', function() {
 		let e = b64encode(code.value);
 		let s = b64encodeSmart(code.value);
@@ -128,7 +125,24 @@ document.addEventListener('DOMContentLoaded', function() {
 		urlElem.value = location.protocol + '//' + location.host + location.pathname + '#' + loc;
 		urlElem.style.display = 'block';
 	});
+
+	const outerOutput = document.getElementById('outer-output');
+	const output = document.getElementById('output');
+	const error = document.getElementById('error');
+	const runner = document.getElementById('run');
+	const myWorker = new Worker('worker.js');
+	myWorker.onmessage = function(e) {
+		if (e.data === "ready") {
+			prepare(myWorker);
+		} else {
+			runner.disabled = false;
+			outerOutput.style.display = 'block';
+			output.textContent = e.data[0];
+			error.textContent = e.data[1];
+		}
+	};
 });
+
 </script>
 </body>
 </html>
