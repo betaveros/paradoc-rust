@@ -47,6 +47,12 @@ You can read the <a href="https://betaveros.github.io/paradoc/">Paradoc document
 // wasm-pack build --target web
 import init, { encapsulated_eval } from './pkg/paradoc.js';
 
+const codepage =['∅', 'α', 'β', 'γ', '\x04', 'ε', 'φ', '\x07', '\x08', '\t', '\n', '\x0b', 'λ', '\r', 'Ŋ', '\x0f', 'Ƥ', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', 'χ', '\x19', 'ζ', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f', ' ', '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?', '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', '\\', ']', '^', '_', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~', '\x7f', '€', '�', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '→', 'Ž', '�', '�', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '⇒', 'ž', 'Ÿ', '␣', '¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '\xad', '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ð', 'Ñ', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'Ý', 'Þ', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ð', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù', 'ú', 'û', 'ü', 'ý', 'þ', 'ÿ'];
+const codepageInverse = {};
+for (let i = 0; i < codepage.length; i++) {
+	codepageInverse[codepage[i]] = i;
+}
+
 async function prepare() {
 	await init();
 	const code = document.getElementById('code');
@@ -80,17 +86,46 @@ function b64decode(s) {
 	}
 	return new TextDecoder().decode(uarr);
 }
+function b64encodeSmart(s) { // may return null
+	const carr = [];
+	for (let i = 0; i < s.length; i++) {
+		let x = codepageInverse[s[i]];
+		if (x === undefined) {
+			console.warn('no: ' + s[i]);
+			return null;
+		} else {
+			carr.push(String.fromCharCode(x));
+		}
+	}
+	return btoa(carr.join(""));
+}
+function b64decodeSmart(s) {
+	const bs = atob(s);
+	const uarr = [];
+	for (let i = 0; i < bs.length; i++) {
+		uarr.push(codepage[bs.charCodeAt(i)]);
+	}
+	return uarr.join("");
+}
 
 document.addEventListener('DOMContentLoaded', function() {
 	var base64 = location.hash.substr(1);
 	const code = document.getElementById('code');
 	const urlElem = document.getElementById('url');
 	if (base64.length) {
-		code.value = b64decode(base64);
+		if (base64[0] === '#') {
+			code.value = b64decodeSmart(base64.slice(1));
+		} else {
+			code.value = b64decode(base64);
+		}
 	}
 	prepare();
 	document.getElementById('gen-url').addEventListener('click', function() {
-		urlElem.value = location.protocol + '//' + location.host + location.pathname + '#' + b64encode(code.value);
+		let e = b64encode(code.value);
+		let s = b64encodeSmart(code.value);
+		let loc = s === null ? e : '#' + s;
+		if (loc.length > e.length) loc = e;
+		urlElem.value = location.protocol + '//' + location.host + location.pathname + '#' + loc;
 		urlElem.style.display = 'block';
 	});
 });
